@@ -130,7 +130,7 @@ function QuickLink({ icon, title, description, onClick, accent }) {
 export default function Home({ onNavigate }) {
   const isMobile = useIsMobile()
   const [stats, setStats] = useState({ videos: '—', events: '—', expenses: '—' })
-  const [upcomingPractices, setUpcomingPractices] = useState([])
+  const [upcomingPractices, setUpcomingPractices] = useState(null)
 
   useEffect(() => {
     async function fetchStats() {
@@ -152,16 +152,19 @@ export default function Home({ onNavigate }) {
     }
 
     async function fetchUpcoming() {
-      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-      const { data: events } = await supabase
+      // Look back 14 days so recently-passed events still appear
+      const cutoff = new Date(today)
+      cutoff.setDate(cutoff.getDate() - 14)
+      const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`
+      const { data: events, error } = await supabase
         .from('events')
         .select('*')
-        .gte('date', todayStr)
+        .gte('date', cutoffStr)
         .order('date', { ascending: true })
         .order('time', { ascending: true })
         .limit(4)
 
-      if (!events || events.length === 0) { setUpcomingPractices([]); return }
+      if (error || !events || events.length === 0) { setUpcomingPractices([]); return }
 
       const ids = events.map(e => e.id)
       const { data: attendanceRows } = await supabase
@@ -238,71 +241,79 @@ export default function Home({ onNavigate }) {
         <StatCard icon="💰" label="Total spent" value={stats.expenses} accent={colors.green} />
       </div>
 
-      {/* Upcoming Attendance Widget */}
-      {upcomingPractices.length > 0 && (
-        <div style={{ marginBottom: isMobile ? '28px' : '36px' }}>
-          <p style={{
-            fontFamily: fonts.mono,
-            fontSize: '0.68rem',
-            color: colors.textMuted,
-            letterSpacing: '0.12em',
-            textTransform: 'uppercase',
-            marginBottom: '14px',
-          }}>
-            Upcoming Attendance
-          </p>
-          <div style={{
-            background: colors.surface,
-            border: `1px solid ${colors.border}`,
-            borderRadius: radius.xl,
-            boxShadow: shadow.card,
-            overflow: 'hidden',
-          }}>
-            {upcomingPractices.map((practice, idx) => {
-              const yesWidth = (practice.yes / 12) * 100
-              const noWidth = (practice.no / 12) * 100
-              const pendingWidth = (practice.pending / 12) * 100
-              return (
-                <div
-                  key={practice.id}
-                  onClick={() => onNavigate('calendar')}
-                  style={{
-                    padding: '14px 20px',
-                    borderBottom: idx < upcomingPractices.length - 1 ? `1px solid ${colors.border}` : 'none',
-                    cursor: 'pointer',
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.background = colors.surfaceHover }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                    <div>
-                      <span style={{ fontFamily: fonts.heading, fontSize: '0.9rem', color: colors.cream, fontWeight: 700 }}>
-                        {practice.title}
-                      </span>
-                      <span style={{ color: colors.textMuted, fontSize: '0.75rem', marginLeft: '10px' }}>
-                        {formatShortDate(practice.date)}
-                        {practice.time ? ` · ${formatTime12(practice.time)}` : ''}
-                        {practice.end_time ? ` – ${formatTime12(practice.end_time)}` : ''}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', gap: '12px', fontSize: '0.75rem', flexShrink: 0, marginLeft: '12px' }}>
-                      <span style={{ color: colors.green, fontWeight: 600 }}>✓ {practice.yes}</span>
-                      <span style={{ color: colors.red, fontWeight: 600 }}>✗ {practice.no}</span>
-                      <span style={{ color: colors.textMuted }}>{practice.pending} pending</span>
-                    </div>
+      {/* Upcoming Attendance Widget — always rendered */}
+      <div style={{ marginBottom: isMobile ? '28px' : '36px' }}>
+        <p style={{
+          fontFamily: fonts.mono,
+          fontSize: '0.68rem',
+          color: colors.textMuted,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          marginBottom: '14px',
+        }}>
+          Attendance
+        </p>
+        <div style={{
+          background: colors.surface,
+          border: `1px solid ${colors.border}`,
+          borderRadius: radius.xl,
+          boxShadow: shadow.card,
+          overflow: 'hidden',
+        }}>
+          {upcomingPractices === null ? (
+            <div style={{ padding: '20px', textAlign: 'center', color: colors.textMuted, fontSize: '0.82rem' }}>
+              Loading…
+            </div>
+          ) : upcomingPractices.length === 0 ? (
+            <div style={{ padding: '20px', textAlign: 'center', color: colors.textMuted, fontSize: '0.82rem' }}>
+              No recent practices.{' '}
+              <button onClick={() => onNavigate('calendar')} style={{ background: 'none', border: 'none', color: colors.gold, cursor: 'pointer', fontSize: 'inherit', textDecoration: 'underline', padding: 0 }}>
+                Add one?
+              </button>
+            </div>
+          ) : upcomingPractices.map((practice, idx) => {
+            const yesWidth = (practice.yes / 12) * 100
+            const noWidth = (practice.no / 12) * 100
+            const pendingWidth = (practice.pending / 12) * 100
+            return (
+              <div
+                key={practice.id}
+                onClick={() => onNavigate('calendar')}
+                style={{
+                  padding: '14px 20px',
+                  borderBottom: idx < upcomingPractices.length - 1 ? `1px solid ${colors.border}` : 'none',
+                  cursor: 'pointer',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = colors.surfaceHover }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div>
+                    <span style={{ fontFamily: fonts.heading, fontSize: '0.9rem', color: colors.cream, fontWeight: 700 }}>
+                      {practice.title}
+                    </span>
+                    <span style={{ color: colors.textMuted, fontSize: '0.75rem', marginLeft: '10px' }}>
+                      {formatShortDate(practice.date)}
+                      {practice.time ? ` · ${formatTime12(practice.time)}` : ''}
+                      {practice.end_time ? ` – ${formatTime12(practice.end_time)}` : ''}
+                    </span>
                   </div>
-                  {/* Attendance bar */}
-                  <div style={{ display: 'flex', height: '5px', borderRadius: '3px', overflow: 'hidden', background: colors.border }}>
-                    {yesWidth > 0 && <div style={{ width: `${yesWidth}%`, background: colors.green, transition: 'width 0.3s' }} />}
-                    {noWidth > 0 && <div style={{ width: `${noWidth}%`, background: colors.red, transition: 'width 0.3s' }} />}
-                    {pendingWidth > 0 && <div style={{ width: `${pendingWidth}%`, background: colors.border }} />}
+                  <div style={{ display: 'flex', gap: '12px', fontSize: '0.75rem', flexShrink: 0, marginLeft: '12px' }}>
+                    <span style={{ color: colors.green, fontWeight: 600 }}>✓ {practice.yes}</span>
+                    <span style={{ color: colors.red, fontWeight: 600 }}>✗ {practice.no}</span>
+                    <span style={{ color: colors.textMuted }}>{practice.pending} pending</span>
                   </div>
                 </div>
-              )
-            })}
-          </div>
+                <div style={{ display: 'flex', height: '5px', borderRadius: '3px', overflow: 'hidden', background: colors.border }}>
+                  {yesWidth > 0 && <div style={{ width: `${yesWidth}%`, background: colors.green, transition: 'width 0.3s' }} />}
+                  {noWidth > 0 && <div style={{ width: `${noWidth}%`, background: colors.red, transition: 'width 0.3s' }} />}
+                  {pendingWidth > 0 && <div style={{ width: `${pendingWidth}%`, background: colors.border }} />}
+                </div>
+              </div>
+            )
+          })}
         </div>
-      )}
+      </div>
 
       {/* Divider label */}
       <p style={{
