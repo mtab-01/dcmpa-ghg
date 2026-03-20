@@ -29,10 +29,14 @@ create table if not exists events (
   title text not null,
   date date not null,
   time time,
+  end_time time,
   location text,
   notes text,
   created_at timestamptz default now()
 );
+
+-- Migration: add end_time to existing events table
+alter table events add column if not exists end_time time;
 
 create table if not exists videos (
   id uuid primary key default gen_random_uuid(),

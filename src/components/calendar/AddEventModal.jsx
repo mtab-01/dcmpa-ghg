@@ -10,6 +10,7 @@ export default function AddEventModal({ onClose, onAdded, defaultDate }) {
     title: '',
     date: defaultDate || new Date().toISOString().split('T')[0],
     time: '',
+    end_time: '',
     location: '',
     notes: '',
   })
@@ -32,6 +33,7 @@ export default function AddEventModal({ onClose, onAdded, defaultDate }) {
         title: form.title.trim(),
         date: form.date,
         time: form.time || null,
+        end_time: form.end_time || null,
         location: form.location.trim() || null,
         notes: form.notes.trim() || null,
       }])
@@ -77,6 +79,13 @@ export default function AddEventModal({ onClose, onAdded, defaultDate }) {
           type="time"
           value={form.time}
           onChange={set('time')}
+        />
+
+        <Input
+          label="End Time"
+          type="time"
+          value={form.end_time}
+          onChange={set('end_time')}
         />
 
         <Input

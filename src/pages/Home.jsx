@@ -8,6 +8,20 @@ const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ]
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function formatShortDate(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const dt = new Date(y, m - 1, d)
+  return `${DAY_NAMES[dt.getDay()]}, ${MONTH_NAMES[m - 1].slice(0, 3)} ${d}`
+}
+
+function formatTime12(timeStr) {
+  if (!timeStr) return null
+  const [h, min] = timeStr.split(':').map(Number)
+  const ampm = h >= 12 ? 'PM' : 'AM'
+  return `${h % 12 || 12}:${String(min).padStart(2, '0')} ${ampm}`
+}
 
 function StatCard({ icon, label, value, accent }) {
   return (
@@ -116,6 +130,7 @@ function QuickLink({ icon, title, description, onClick, accent }) {
 export default function Home({ onNavigate }) {
   const isMobile = useIsMobile()
   const [stats, setStats] = useState({ videos: '—', events: '—', expenses: '—' })
+  const [upcomingPractices, setUpcomingPractices] = useState([])
 
   useEffect(() => {
     async function fetchStats() {
@@ -135,7 +150,41 @@ export default function Home({ onNavigate }) {
         expenses: total > 0 ? `$${total.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '$0',
       })
     }
+
+    async function fetchUpcoming() {
+      const todayStr = today.toISOString().split('T')[0]
+      const { data: events } = await supabase
+        .from('events')
+        .select('id, title, date, time, end_time')
+        .gte('date', todayStr)
+        .order('date', { ascending: true })
+        .order('time', { ascending: true })
+        .limit(4)
+
+      if (!events || events.length === 0) { setUpcomingPractices([]); return }
+
+      const ids = events.map(e => e.id)
+      const { data: attendanceRows } = await supabase
+        .from('attendance')
+        .select('event_id, position, response')
+        .in('event_id', ids)
+
+      const attMap = {}
+      for (const row of (attendanceRows || [])) {
+        if (!attMap[row.event_id]) attMap[row.event_id] = {}
+        attMap[row.event_id][row.position] = row.response
+      }
+
+      setUpcomingPractices(events.map(e => {
+        const att = attMap[e.id] || {}
+        const yes = Object.values(att).filter(v => v === 'yes').length
+        const no = Object.values(att).filter(v => v === 'no').length
+        return { ...e, yes, no, pending: 12 - yes - no }
+      }))
+    }
+
     fetchStats()
+    fetchUpcoming()
   }, [])
 
   const greeting = (() => {
@@ -188,6 +237,72 @@ export default function Home({ onNavigate }) {
         <StatCard icon="📅" label={`Events in ${MONTH_NAMES[today.getMonth()]}`} value={stats.events} accent={colors.orange} />
         <StatCard icon="💰" label="Total spent" value={stats.expenses} accent={colors.green} />
       </div>
+
+      {/* Upcoming Attendance Widget */}
+      {upcomingPractices.length > 0 && (
+        <div style={{ marginBottom: isMobile ? '28px' : '36px' }}>
+          <p style={{
+            fontFamily: fonts.mono,
+            fontSize: '0.68rem',
+            color: colors.textMuted,
+            letterSpacing: '0.12em',
+            textTransform: 'uppercase',
+            marginBottom: '14px',
+          }}>
+            Upcoming Attendance
+          </p>
+          <div style={{
+            background: colors.surface,
+            border: `1px solid ${colors.border}`,
+            borderRadius: radius.xl,
+            boxShadow: shadow.card,
+            overflow: 'hidden',
+          }}>
+            {upcomingPractices.map((practice, idx) => {
+              const yesWidth = (practice.yes / 12) * 100
+              const noWidth = (practice.no / 12) * 100
+              const pendingWidth = (practice.pending / 12) * 100
+              return (
+                <div
+                  key={practice.id}
+                  onClick={() => onNavigate('calendar')}
+                  style={{
+                    padding: '14px 20px',
+                    borderBottom: idx < upcomingPractices.length - 1 ? `1px solid ${colors.border}` : 'none',
+                    cursor: 'pointer',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = colors.surfaceHover }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <div>
+                      <span style={{ fontFamily: fonts.heading, fontSize: '0.9rem', color: colors.cream, fontWeight: 700 }}>
+                        {practice.title}
+                      </span>
+                      <span style={{ color: colors.textMuted, fontSize: '0.75rem', marginLeft: '10px' }}>
+                        {formatShortDate(practice.date)}
+                        {practice.time ? ` · ${formatTime12(practice.time)}` : ''}
+                        {practice.end_time ? ` – ${formatTime12(practice.end_time)}` : ''}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '12px', fontSize: '0.75rem', flexShrink: 0, marginLeft: '12px' }}>
+                      <span style={{ color: colors.green, fontWeight: 600 }}>✓ {practice.yes}</span>
+                      <span style={{ color: colors.red, fontWeight: 600 }}>✗ {practice.no}</span>
+                      <span style={{ color: colors.textMuted }}>{practice.pending} pending</span>
+                    </div>
+                  </div>
+                  {/* Attendance bar */}
+                  <div style={{ display: 'flex', height: '5px', borderRadius: '3px', overflow: 'hidden', background: colors.border }}>
+                    {yesWidth > 0 && <div style={{ width: `${yesWidth}%`, background: colors.green, transition: 'width 0.3s' }} />}
+                    {noWidth > 0 && <div style={{ width: `${noWidth}%`, background: colors.red, transition: 'width 0.3s' }} />}
+                    {pendingWidth > 0 && <div style={{ width: `${pendingWidth}%`, background: colors.border }} />}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Divider label */}
       <p style={{

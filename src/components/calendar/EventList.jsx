@@ -76,7 +76,7 @@ export default function EventList({ events, selectedDate, onAddEvent }) {
 }
 
 function EventCard({ event }) {
-  const gcalUrl = buildGCalUrl({ title: event.title, date: event.date, startTime: event.time, location: event.location, notes: event.notes })
+  const gcalUrl = buildGCalUrl({ title: event.title, date: event.date, startTime: event.time, endTime: event.end_time, location: event.location, notes: event.notes })
   const members = loadMembers()
   const [attendance, setAttendance] = useState({})
   const [showAttendance, setShowAttendance] = useState(false)
@@ -125,7 +125,9 @@ function EventCard({ event }) {
         {event.time && (
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <span style={{ color: colors.textMuted, fontSize: '0.75rem' }}>🕐</span>
-            <span style={{ color: colors.creamDim, fontSize: '0.82rem', fontFamily: fonts.mono }}>{formatTime(event.time)}</span>
+            <span style={{ color: colors.creamDim, fontSize: '0.82rem', fontFamily: fonts.mono }}>
+              {formatTime(event.time)}{event.end_time ? ` – ${formatTime(event.end_time)}` : ''}
+            </span>
           </div>
         )}
         {event.location && (
