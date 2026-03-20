@@ -41,7 +41,12 @@ export default function AddEventModal({ onClose, onAdded, defaultDate }) {
     setLoading(false)
 
     if (err) {
-      setError(err.message)
+      const msg = err.message || ''
+      if (msg.toLowerCase().includes('fetch') || msg.toLowerCase().includes('network')) {
+        setError('Cannot reach database. Your Supabase project may be paused — visit supabase.com to resume it.')
+      } else {
+        setError(err.message)
+      }
     } else {
       onAdded(data)
       onClose()

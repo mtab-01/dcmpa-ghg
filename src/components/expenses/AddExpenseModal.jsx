@@ -81,7 +81,10 @@ export default function AddExpenseModal({ onClose, onAdded, members }) {
     setLoading(false)
 
     if (err) {
-      setError(err.message)
+      const msg = err.message || ''
+      setError(msg.toLowerCase().includes('fetch') || msg.toLowerCase().includes('network')
+        ? 'Cannot reach database. Your Supabase project may be paused — visit supabase.com to resume it.'
+        : msg)
     } else {
       onAdded(data)
       onClose()
