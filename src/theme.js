@@ -1,39 +1,40 @@
 export const colors = {
-  bg: '#0d0d0d',
-  bgDeep: '#1a0a2e',
-  surface: '#1e1e2e',
-  surfaceHover: '#252535',
-  border: '#2a1a4e',
-  borderLight: '#3a2a5e',
-  gold: '#ffd700',
-  goldDim: '#cc9900',
-  orange: '#ff8c00',
-  red: '#cc0000',
-  redDim: '#990000',
-  cream: '#f0e6d3',
-  creamDim: '#c8b89a',
-  textMuted: '#8a7a6a',
-  green: '#22c55e',
-  greenDim: '#166534',
+  bg: '#f4f7fb',
+  bgDeep: '#eaf1f9',
+  surface: '#ffffff',
+  surfaceHover: '#f0f6ff',
+  border: '#d5e3f0',
+  borderLight: '#e8f1f9',
+  gold: '#2e86de',      // primary accent → sky blue
+  goldDim: '#1a6bbf',
+  orange: '#f5820d',    // warm orange accent
+  orangeDim: '#d4700b',
+  red: '#e03535',
+  redDim: '#b52020',
+  cream: '#1a2b42',     // primary text
+  creamDim: '#3d5470',
+  textMuted: '#8aa3be',
+  green: '#16a34a',
+  greenDim: '#14532d',
 }
 
 export const fonts = {
-  heading: "'Georgia', 'Times New Roman', serif",
-  mono: "'Courier New', 'Consolas', 'Monaco', monospace",
-  body: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
+  heading: "'Plus Jakarta Sans', 'Inter', system-ui, sans-serif",
+  mono: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace",
+  body: "'Inter', system-ui, -apple-system, sans-serif",
 }
 
 export const radius = {
-  sm: '4px',
-  md: '8px',
-  lg: '12px',
-  xl: '16px',
+  sm: '6px',
+  md: '10px',
+  lg: '14px',
+  xl: '18px',
 }
 
 export const shadow = {
-  card: '0 4px 24px rgba(0,0,0,0.6)',
-  modal: '0 8px 48px rgba(0,0,0,0.8)',
-  glow: '0 0 20px rgba(255,215,0,0.15)',
+  card: '0 2px 16px rgba(46, 134, 222, 0.08)',
+  modal: '0 8px 48px rgba(46, 134, 222, 0.16)',
+  glow: '0 0 20px rgba(46, 134, 222, 0.14)',
 }
 
 export const transitions = {
