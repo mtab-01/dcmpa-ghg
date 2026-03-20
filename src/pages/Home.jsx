@@ -152,7 +152,7 @@ export default function Home({ onNavigate }) {
     }
 
     async function fetchUpcoming() {
-      const todayStr = today.toISOString().split('T')[0]
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
       const { data: events } = await supabase
         .from('events')
         .select('*')
