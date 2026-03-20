@@ -155,7 +155,7 @@ export default function Home({ onNavigate }) {
       const todayStr = today.toISOString().split('T')[0]
       const { data: events } = await supabase
         .from('events')
-        .select('id, title, date, time, end_time')
+        .select('*')
         .gte('date', todayStr)
         .order('date', { ascending: true })
         .order('time', { ascending: true })

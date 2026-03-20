@@ -48,6 +48,11 @@ export default function PracticeCalendar() {
     setSelectedDate(event.date)
   }
 
+  function handleEdited(updated) {
+    setEvents(prev => prev.map(e => e.id === updated.id ? updated : e).sort((a, b) => a.date.localeCompare(b.date)))
+    setSelectedDate(updated.date)
+  }
+
   function prevMonth() {
     setCurrentMonth(({ year, month }) => {
       if (month === 0) return { year: year - 1, month: 11 }
@@ -175,6 +180,7 @@ export default function PracticeCalendar() {
             events={selectedEvents}
             selectedDate={selectedDate}
             onAddEvent={() => setShowAdd(true)}
+            onEdited={handleEdited}
           />
         </div>
       )}

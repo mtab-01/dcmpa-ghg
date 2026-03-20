@@ -5,14 +5,15 @@ import Modal from '../ui/Modal'
 import Button from '../ui/Button'
 import { Input, Textarea } from '../ui/Input'
 
-export default function AddEventModal({ onClose, onAdded, defaultDate }) {
+export default function AddEventModal({ onClose, onAdded, onEdited, defaultDate, event: existingEvent }) {
+  const isEdit = !!existingEvent
   const [form, setForm] = useState({
-    title: '',
-    date: defaultDate || new Date().toISOString().split('T')[0],
-    time: '',
-    end_time: '',
-    location: '',
-    notes: '',
+    title: existingEvent?.title || '',
+    date: existingEvent?.date || defaultDate || new Date().toISOString().split('T')[0],
+    time: existingEvent?.time || '',
+    end_time: existingEvent?.end_time || '',
+    location: existingEvent?.location || '',
+    notes: existingEvent?.notes || '',
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -27,36 +28,54 @@ export default function AddEventModal({ onClose, onAdded, defaultDate }) {
     setLoading(true)
     setError('')
 
-    const { data, error: err } = await supabase
-      .from('events')
-      .insert([{
-        title: form.title.trim(),
-        date: form.date,
-        time: form.time || null,
-        end_time: form.end_time || null,
-        location: form.location.trim() || null,
-        notes: form.notes.trim() || null,
-      }])
-      .select()
-      .single()
+    const payload = {
+      title: form.title.trim(),
+      date: form.date,
+      time: form.time || null,
+      end_time: form.end_time || null,
+      location: form.location.trim() || null,
+      notes: form.notes.trim() || null,
+    }
 
-    setLoading(false)
+    if (isEdit) {
+      const { data, error: err } = await supabase
+        .from('events')
+        .update(payload)
+        .eq('id', existingEvent.id)
+        .select()
+        .single()
 
-    if (err) {
-      const msg = err.message || ''
-      if (msg.toLowerCase().includes('fetch') || msg.toLowerCase().includes('network')) {
-        setError('Cannot reach database. Your Supabase project may be paused — visit supabase.com to resume it.')
-      } else {
+      setLoading(false)
+      if (err) {
         setError(err.message)
+      } else {
+        onEdited(data)
+        onClose()
       }
     } else {
-      onAdded(data)
-      onClose()
+      const { data, error: err } = await supabase
+        .from('events')
+        .insert([payload])
+        .select()
+        .single()
+
+      setLoading(false)
+      if (err) {
+        const msg = err.message || ''
+        if (msg.toLowerCase().includes('fetch') || msg.toLowerCase().includes('network')) {
+          setError('Cannot reach database. Your Supabase project may be paused — visit supabase.com to resume it.')
+        } else {
+          setError(err.message)
+        }
+      } else {
+        onAdded(data)
+        onClose()
+      }
     }
   }
 
   return (
-    <Modal onClose={onClose} title="Add Practice">
+    <Modal onClose={onClose} title={isEdit ? 'Edit Practice' : 'Add Practice'}>
       <form onSubmit={handleSubmit}>
         <Input
           label="Title"
@@ -110,7 +129,7 @@ export default function AddEventModal({ onClose, onAdded, defaultDate }) {
         <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
           <Button variant="ghost" onClick={onClose} type="button">Cancel</Button>
           <Button variant="primary" type="submit" disabled={loading}>
-            {loading ? 'Saving…' : 'Add Practice'}
+            {loading ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Practice'}
           </Button>
         </div>
       </form>

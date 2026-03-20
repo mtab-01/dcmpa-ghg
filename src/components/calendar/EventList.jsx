@@ -4,6 +4,7 @@ import { buildGCalUrl } from '../../utils/calendarUrl'
 import { DEFAULT_MEMBERS } from '../../constants'
 import { supabase } from '../../supabase'
 import Button from '../ui/Button'
+import AddEventModal from './AddEventModal'
 
 const MEMBERS_KEY = 'bhangra_members'
 
@@ -33,7 +34,7 @@ function formatDisplayDate(dateStr) {
   return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
 }
 
-export default function EventList({ events, selectedDate, onAddEvent }) {
+export default function EventList({ events, selectedDate, onAddEvent, onEdited }) {
   if (!selectedDate) {
     return (
       <div style={{ padding: '24px', textAlign: 'center', color: colors.textMuted, fontSize: '0.85rem' }}>
@@ -68,19 +69,23 @@ export default function EventList({ events, selectedDate, onAddEvent }) {
         </div>
       ) : (
         <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {events.map(event => <EventCard key={event.id} event={event} />)}
+          {events.map(event => <EventCard key={event.id} event={event} onEdited={onEdited} />)}
         </div>
       )}
     </div>
   )
 }
 
-function EventCard({ event }) {
+function EventCard({ event, onEdited }) {
   const gcalUrl = buildGCalUrl({ title: event.title, date: event.date, startTime: event.time, endTime: event.end_time, location: event.location, notes: event.notes })
   const members = loadMembers()
   const [attendance, setAttendance] = useState({})
   const [showAttendance, setShowAttendance] = useState(false)
   const [loadingAttendance, setLoadingAttendance] = useState(false)
+  const [showEdit, setShowEdit] = useState(false)
+  const [currentEvent, setCurrentEvent] = useState(event)
+
+  useEffect(() => { setCurrentEvent(event) }, [event])
 
   useEffect(() => {
     if (!showAttendance) return
@@ -88,7 +93,7 @@ function EventCard({ event }) {
     supabase
       .from('attendance')
       .select('position, response')
-      .eq('event_id', event.id)
+      .eq('event_id', currentEvent.id)
       .then(({ data }) => {
         if (data) {
           const map = {}
@@ -97,7 +102,7 @@ function EventCard({ event }) {
         }
         setLoadingAttendance(false)
       })
-  }, [showAttendance, event.id])
+  }, [showAttendance, currentEvent.id])
 
   const setResponse = useCallback(async (position, value) => {
     const current = attendance[position]
@@ -106,38 +111,58 @@ function EventCard({ event }) {
     setAttendance(prev => ({ ...prev, [position]: newVal }))
 
     if (newVal) {
-      await supabase.from('attendance').upsert({ event_id: event.id, position, response: newVal }, { onConflict: 'event_id,position' })
+      await supabase.from('attendance').upsert({ event_id: currentEvent.id, position, response: newVal }, { onConflict: 'event_id,position' })
     } else {
-      await supabase.from('attendance').delete().eq('event_id', event.id).eq('position', position)
+      await supabase.from('attendance').delete().eq('event_id', currentEvent.id).eq('position', position)
     }
-  }, [attendance, event.id])
+  }, [attendance, currentEvent.id])
+
+  const handleEdited = (updated) => {
+    setCurrentEvent(updated)
+    if (onEdited) onEdited(updated)
+  }
 
   const yesCount = members.filter((_, i) => attendance[i] === 'yes').length
   const noCount = members.filter((_, i) => attendance[i] === 'no').length
 
   return (
     <div style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: radius.md, padding: '14px 16px', boxShadow: shadow.card }}>
-      <h4 style={{ fontFamily: fonts.heading, color: colors.cream, fontSize: '0.95rem', lineHeight: 1.3 }}>
-        {event.title}
-      </h4>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
+        <h4 style={{ fontFamily: fonts.heading, color: colors.cream, fontSize: '0.95rem', lineHeight: 1.3, flex: 1 }}>
+          {currentEvent.title}
+        </h4>
+        <button
+          onClick={() => setShowEdit(true)}
+          title="Edit event"
+          style={{
+            background: 'none', border: `1px solid ${colors.border}`, borderRadius: radius.sm,
+            color: colors.textMuted, cursor: 'pointer', padding: '3px 8px',
+            fontSize: '0.72rem', flexShrink: 0, transition: 'all 0.15s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = colors.gold; e.currentTarget.style.color = colors.gold }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = colors.border; e.currentTarget.style.color = colors.textMuted }}
+        >
+          Edit
+        </button>
+      </div>
 
       <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-        {event.time && (
+        {currentEvent.time && (
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <span style={{ color: colors.textMuted, fontSize: '0.75rem' }}>🕐</span>
             <span style={{ color: colors.creamDim, fontSize: '0.82rem', fontFamily: fonts.mono }}>
-              {formatTime(event.time)}{event.end_time ? ` – ${formatTime(event.end_time)}` : ''}
+              {formatTime(currentEvent.time)}{currentEvent.end_time ? ` – ${formatTime(currentEvent.end_time)}` : ''}
             </span>
           </div>
         )}
-        {event.location && (
+        {currentEvent.location && (
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <span style={{ color: colors.textMuted, fontSize: '0.75rem' }}>📍</span>
-            <span style={{ color: colors.creamDim, fontSize: '0.82rem' }}>{event.location}</span>
+            <span style={{ color: colors.creamDim, fontSize: '0.82rem' }}>{currentEvent.location}</span>
           </div>
         )}
-        {event.notes && (
-          <p style={{ color: colors.textMuted, fontSize: '0.8rem', marginTop: '4px', lineHeight: 1.5 }}>{event.notes}</p>
+        {currentEvent.notes && (
+          <p style={{ color: colors.textMuted, fontSize: '0.8rem', marginTop: '4px', lineHeight: 1.5 }}>{currentEvent.notes}</p>
         )}
       </div>
 
@@ -213,6 +238,15 @@ function EventCard({ event }) {
           <Button variant="ghost" size="sm">📅 Add to Google Calendar</Button>
         </a>
       </div>
+
+      {showEdit && (
+        <AddEventModal
+          event={currentEvent}
+          onClose={() => setShowEdit(false)}
+          onEdited={handleEdited}
+          onAdded={() => {}}
+        />
+      )}
     </div>
   )
 }
