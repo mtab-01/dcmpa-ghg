@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { colors, fonts, shadow } from '../theme'
 import { useIsMobile } from '../hooks/useWindowWidth'
+import { useMembers } from '../hooks/useMembers'
 import { getAllFolders } from '../constants'
 import FolderTree from '../components/video/FolderTree'
 import VideoGrid from '../components/video/VideoGrid'
@@ -14,6 +15,7 @@ export default function VideoLibrary() {
   const [selectedFolder, setSelectedFolder] = useState('all')
   const [showAdd, setShowAdd] = useState(false)
   const isMobile = useIsMobile()
+  const { members } = useMembers()
 
   useEffect(() => {
     loadVideos()
@@ -38,7 +40,7 @@ export default function VideoLibrary() {
     setVideos(prev => [video, ...prev])
   }
 
-  const allFolders = getAllFolders()
+  const allFolders = getAllFolders(members)
 
   return (
     <div style={{ display: 'flex', height: '100%', minHeight: '100vh' }}>
@@ -67,6 +69,7 @@ export default function VideoLibrary() {
             videos={videos}
             selectedFolder={selectedFolder}
             onSelectFolder={setSelectedFolder}
+            members={members}
           />
         </aside>
       )}
@@ -144,6 +147,7 @@ export default function VideoLibrary() {
           onClose={() => setShowAdd(false)}
           onAdded={handleAdded}
           defaultFolder={selectedFolder !== 'all' ? selectedFolder : 'at-home'}
+          members={members}
         />
       )}
     </div>

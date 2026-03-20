@@ -1,17 +1,15 @@
 import { useState } from 'react'
 import { colors, fonts, radius } from '../../theme'
-import { FOLDER_STRUCTURE } from '../../constants'
+import { getFolderStructure, DEFAULT_MEMBERS } from '../../constants'
 
-export default function FolderTree({ videos, selectedFolder, onSelectFolder }) {
-  const [expanded, setExpanded] = useState(new Set(['choreo']))
+export default function FolderTree({ videos, selectedFolder, onSelectFolder, members = DEFAULT_MEMBERS }) {
+  const folderStructure = getFolderStructure(members)
+  const [expanded, setExpanded] = useState(new Set(['choreo', 'at-home']))
 
   const getCount = (folderKey) => videos.filter(v => v.folder === folderKey).length
 
-  const getChoreoChildCount = () => {
-    const choreo = FOLDER_STRUCTURE.find(f => f.key === 'choreo')
-    if (!choreo) return 0
-    return choreo.children.reduce((sum, child) => sum + getCount(child.key), 0)
-  }
+  const getChildrenCount = (folder) =>
+    folder.children.reduce((sum, child) => sum + getCount(child.key), 0)
 
   const toggleExpand = (key, e) => {
     e.stopPropagation()
@@ -67,7 +65,7 @@ export default function FolderTree({ videos, selectedFolder, onSelectFolder }) {
 
       <div style={{ height: '1px', background: colors.border, margin: '8px 12px' }} />
 
-      {FOLDER_STRUCTURE.map(folder => {
+      {folderStructure.map(folder => {
         const hasChildren = folder.children && folder.children.length > 0
         const isExpanded = expanded.has(folder.key)
 
@@ -76,7 +74,10 @@ export default function FolderTree({ videos, selectedFolder, onSelectFolder }) {
             {/* Parent folder */}
             <div
               style={itemStyle(hasChildren ? null : folder.key)}
-              onClick={() => hasChildren ? onSelectFolder(folder.key) : onSelectFolder(folder.key)}
+              onClick={() => hasChildren
+                ? toggleExpand(folder.key, { stopPropagation: () => {} })
+                : onSelectFolder(folder.key)
+              }
               onMouseEnter={e => {
                 if (selectedFolder !== folder.key) e.currentTarget.style.background = `${colors.gold}08`
               }}
@@ -101,7 +102,7 @@ export default function FolderTree({ videos, selectedFolder, onSelectFolder }) {
               {!hasChildren && <span style={{ width: '12px', flexShrink: 0 }} />}
               <span>{folder.icon}</span>
               <span style={{ flex: 1 }}>{folder.label}</span>
-              {countBadge(hasChildren ? getChoreoChildCount() : getCount(folder.key))}
+              {countBadge(hasChildren ? getChildrenCount(folder) : getCount(folder.key))}
             </div>
 
             {/* Children */}

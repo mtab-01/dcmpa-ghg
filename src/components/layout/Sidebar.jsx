@@ -21,10 +21,22 @@ export default function Sidebar({ activePage, onNavigate }) {
       boxShadow: shadow.card,
     }}>
       {/* Logo */}
-      <div style={{
-        padding: '28px 20px 24px',
-        borderBottom: `1px solid ${colors.border}`,
-      }}>
+      <button
+        onClick={() => onNavigate('home')}
+        style={{
+          padding: '28px 20px 24px',
+          borderBottom: `1px solid ${colors.border}`,
+          background: 'none',
+          border: 'none',
+          borderBottom: `1px solid ${colors.border}`,
+          cursor: 'pointer',
+          textAlign: 'left',
+          width: '100%',
+          transition: 'opacity 0.15s',
+        }}
+        onMouseEnter={e => { e.currentTarget.style.opacity = '0.75' }}
+        onMouseLeave={e => { e.currentTarget.style.opacity = '1' }}
+      >
         <div style={{
           fontFamily: fonts.heading,
           fontSize: '1.4rem',
@@ -43,7 +55,7 @@ export default function Sidebar({ activePage, onNavigate }) {
         }}>
           GHG
         </div>
-      </div>
+      </button>
 
       {/* Nav Items */}
       <nav style={{ flex: 1, padding: '12px 0' }}>

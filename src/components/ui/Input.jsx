@@ -2,7 +2,7 @@ import { colors, radius, fonts } from '../../theme'
 
 const baseStyle = {
   width: '100%',
-  background: '#0d0d1a',
+  background: colors.surface,
   border: `1px solid ${colors.border}`,
   borderRadius: radius.md,
   color: colors.cream,
@@ -58,7 +58,7 @@ export function Select({ label, error, children, style: extraStyle = {}, ...prop
           fontFamily: fonts.body,
           cursor: 'pointer',
           appearance: 'none',
-          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23ffd700' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E")`,
+          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%232e86de' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E")`,
           backgroundRepeat: 'no-repeat',
           backgroundPosition: 'right 12px center',
           paddingRight: '36px',

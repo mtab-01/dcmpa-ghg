@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { supabase } from '../../supabase'
-import { getAllFolders } from '../../constants'
+import { getAllFolders, DEFAULT_MEMBERS } from '../../constants'
 import { colors } from '../../theme'
 import Modal from '../ui/Modal'
 import Button from '../ui/Button'
 import { Input, Textarea, Select } from '../ui/Input'
 
-export default function AddVideoModal({ onClose, onAdded, defaultFolder }) {
+export default function AddVideoModal({ onClose, onAdded, defaultFolder, members = DEFAULT_MEMBERS }) {
   const [form, setForm] = useState({
     title: '',
     url: '',
@@ -16,7 +16,7 @@ export default function AddVideoModal({ onClose, onAdded, defaultFolder }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const folders = getAllFolders()
+  const folders = getAllFolders(members)
 
   const set = (field) => (e) => setForm(f => ({ ...f, [field]: e.target.value }))
 
