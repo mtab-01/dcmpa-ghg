@@ -1,9 +1,10 @@
-import { useState, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { supabase } from '../supabase'
 import { DEFAULT_MEMBERS } from '../constants'
 
 const STORAGE_KEY = 'bhangra_members'
 
-function loadMembers() {
+function loadLocalMembers() {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored) {
@@ -15,14 +16,34 @@ function loadMembers() {
 }
 
 export function useMembers() {
-  const [members, setMembersState] = useState(loadMembers)
+  const [members, setMembersState] = useState(loadLocalMembers)
+  const [loading, setLoading] = useState(true)
 
-  const setMembers = useCallback((newMembers) => {
-    setMembersState(newMembers)
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newMembers))
-    } catch {}
+  // Load from Supabase on mount, fall back to localStorage
+  useEffect(() => {
+    async function fetchMembers() {
+      const { data, error } = await supabase
+        .from('members')
+        .select('position, name')
+        .order('position')
+
+      if (!error && data && data.length === 12) {
+        const names = data.map(row => row.name)
+        setMembersState(names)
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(names)) } catch {}
+      }
+      setLoading(false)
+    }
+    fetchMembers()
   }, [])
 
-  return { members, setMembers }
+  const setMembers = useCallback(async (newMembers) => {
+    setMembersState(newMembers)
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(newMembers)) } catch {}
+
+    const rows = newMembers.map((name, i) => ({ position: i, name }))
+    await supabase.from('members').upsert(rows, { onConflict: 'position' })
+  }, [])
+
+  return { members, setMembers, loading }
 }

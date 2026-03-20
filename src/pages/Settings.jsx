@@ -5,9 +5,16 @@ import { useIsMobile } from '../hooks/useWindowWidth'
 import Button from '../components/ui/Button'
 
 export default function Settings() {
-  const { members, setMembers } = useMembers()
+  const { members, setMembers, loading } = useMembers()
   const [draft, setDraft] = useState([...members])
   const [saved, setSaved] = useState(false)
+
+  // Sync draft when members load from Supabase
+  const [synced, setSynced] = useState(false)
+  if (!loading && !synced) {
+    setSynced(true)
+    setDraft([...members])
+  }
   const isMobile = useIsMobile()
 
   function updateMember(idx, value) {
@@ -191,9 +198,7 @@ export default function Settings() {
         </h3>
         <p style={{ color: colors.textMuted, fontSize: '0.82rem', lineHeight: 1.6 }}>
           Shared team portal for your 12-person competitive DCMPA GHG team.
-          Member names are stored locally in your browser. Changes made here
-          are visible only on this device — ask your team to update their names
-          too if needed.
+          Member names are synced across all devices via the cloud.
         </p>
         <p style={{ color: colors.textMuted, fontSize: '0.78rem', marginTop: '8px', fontFamily: fonts.mono }}>
           VERSION 1.0 · DCMPA GHG

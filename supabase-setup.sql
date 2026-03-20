@@ -1,5 +1,29 @@
 -- Run this in your Supabase SQL Editor (supabase.com → SQL Editor → New query)
 
+create table if not exists members (
+  position int primary key,
+  name text not null
+);
+
+-- Seed default names
+insert into members (position, name)
+select i, 'Member ' || (i + 1)
+from generate_series(0, 11) as i
+on conflict (position) do nothing;
+
+alter table members enable row level security;
+create policy "public access" on members for all using (true) with check (true);
+
+create table if not exists attendance (
+  event_id uuid not null,
+  position int not null,
+  response text check (response in ('yes', 'no')),
+  primary key (event_id, position)
+);
+
+alter table attendance enable row level security;
+create policy "public access" on attendance for all using (true) with check (true);
+
 create table if not exists events (
   id uuid primary key default gen_random_uuid(),
   title text not null,
