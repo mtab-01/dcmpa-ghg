@@ -1,11 +1,11 @@
 {
-  "name": "Bhangra HQ",
-  "short_name": "BhangraHQ",
-  "description": "Team portal for competitive Bhangra dance team",
+  "name": "DCMPA GHG",
+  "short_name": "DCMPA GHG",
+  "description": "Team portal for DCMPA GHG competitive dance team",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0d0d0d",
-  "theme_color": "#1a0a2e",
+  "background_color": "#f4f7fb",
+  "theme_color": "#eaf1f9",
   "orientation": "portrait",
   "icons": [
     {

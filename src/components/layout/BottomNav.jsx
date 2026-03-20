@@ -1,6 +1,7 @@
 import { colors, fonts } from '../../theme'
 
 const NAV_ITEMS = [
+  { key: 'home', label: 'Home', icon: '🏠' },
   { key: 'videos', label: 'Videos', icon: '▶' },
   { key: 'calendar', label: 'Calendar', icon: '📅' },
   { key: 'expenses', label: 'Expenses', icon: '💰' },

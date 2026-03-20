@@ -1,6 +1,7 @@
 import { colors, fonts, shadow } from '../../theme'
 
 const NAV_ITEMS = [
+  { key: 'home', label: 'Home', icon: '🏠' },
   { key: 'videos', label: 'Video Library', icon: '▶' },
   { key: 'calendar', label: 'Practice Calendar', icon: '📅' },
   { key: 'expenses', label: 'Expenses', icon: '💰' },
@@ -30,7 +31,7 @@ export default function Sidebar({ activePage, onNavigate }) {
           color: colors.gold,
           lineHeight: 1.2,
         }}>
-          Bhangra
+          DCMPA
         </div>
         <div style={{
           fontFamily: fonts.mono,
@@ -40,7 +41,7 @@ export default function Sidebar({ activePage, onNavigate }) {
           textTransform: 'uppercase',
           marginTop: '2px',
         }}>
-          HQ
+          GHG
         </div>
       </div>
 

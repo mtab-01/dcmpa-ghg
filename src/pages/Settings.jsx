@@ -187,16 +187,16 @@ export default function Settings() {
         padding: '16px 20px',
       }}>
         <h3 style={{ fontFamily: fonts.heading, color: colors.cream, fontSize: '0.95rem', marginBottom: '8px' }}>
-          About Bhangra HQ
+          About DCMPA GHG
         </h3>
         <p style={{ color: colors.textMuted, fontSize: '0.82rem', lineHeight: 1.6 }}>
-          Shared team portal for your 12-person competitive Bhangra team.
+          Shared team portal for your 12-person competitive DCMPA GHG team.
           Member names are stored locally in your browser. Changes made here
           are visible only on this device — ask your team to update their names
           too if needed.
         </p>
         <p style={{ color: colors.textMuted, fontSize: '0.78rem', marginTop: '8px', fontFamily: fonts.mono }}>
-          VERSION 1.0 · BHANGRA HQ
+          VERSION 1.0 · DCMPA GHG
         </p>
       </div>
     </div>
