@@ -2,9 +2,9 @@ import { colors, fonts } from '../../theme'
 import VideoCard from './VideoCard'
 
 export default function VideoGrid({ videos, onDelete, selectedFolder }) {
-  const filtered = selectedFolder && selectedFolder !== 'all'
-    ? videos.filter(v => v.folder === selectedFolder)
-    : videos
+  const filtered = !selectedFolder || selectedFolder === 'all'
+    ? videos
+    : videos.filter(v => v.folder === selectedFolder || v.folder?.startsWith(selectedFolder + '-'))
 
   if (filtered.length === 0) {
     return (

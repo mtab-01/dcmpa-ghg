@@ -1,18 +1,55 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
-import { colors, fonts, shadow } from '../theme'
+import { colors, fonts, radius, shadow } from '../theme'
 import { useIsMobile } from '../hooks/useWindowWidth'
 import { useMembers } from '../hooks/useMembers'
-import { getAllFolders } from '../constants'
+import { getFolderStructure } from '../constants'
 import FolderTree from '../components/video/FolderTree'
 import VideoGrid from '../components/video/VideoGrid'
 import AddVideoModal from '../components/video/AddVideoModal'
 import Button from '../components/ui/Button'
 
+function Chip({ label, count, active, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+        padding: '7px 14px',
+        borderRadius: '20px',
+        border: `1.5px solid ${active ? colors.gold : colors.border}`,
+        background: active ? colors.gold : colors.surface,
+        color: active ? '#fff' : colors.creamDim,
+        fontFamily: fonts.body,
+        fontWeight: 600,
+        fontSize: '0.82rem',
+        whiteSpace: 'nowrap',
+        cursor: 'pointer',
+        flexShrink: 0,
+        transition: 'all 0.15s ease',
+      }}
+    >
+      {label}
+      {count != null && (
+        <span style={{
+          fontSize: '0.7rem',
+          opacity: active ? 0.85 : 0.6,
+          fontWeight: 500,
+        }}>
+          {count}
+        </span>
+      )}
+    </button>
+  )
+}
+
 export default function VideoLibrary() {
   const [videos, setVideos] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedFolder, setSelectedFolder] = useState('all')
+  const [mobileParent, setMobileParent] = useState('all')
   const [showAdd, setShowAdd] = useState(false)
   const isMobile = useIsMobile()
   const { members } = useMembers()
@@ -40,7 +77,7 @@ export default function VideoLibrary() {
     setVideos(prev => [video, ...prev])
   }
 
-  const allFolders = getAllFolders(members)
+  const folderStructure = getFolderStructure(members)
 
   return (
     <div style={{ display: 'flex', height: '100%', minHeight: '100vh' }}>
@@ -102,29 +139,72 @@ export default function VideoLibrary() {
           </Button>
         </div>
 
-        {/* Mobile folder picker */}
+        {/* Mobile folder picker — two-tier chip navigation */}
         {isMobile && (
           <div style={{ marginBottom: '20px' }}>
-            <select
-              value={selectedFolder}
-              onChange={e => setSelectedFolder(e.target.value)}
-              style={{
-                width: '100%',
-                background: colors.surface,
-                border: `1px solid ${colors.border}`,
-                borderRadius: '8px',
-                color: colors.cream,
-                padding: '10px 12px',
-                fontSize: '0.9rem',
-              }}
-            >
-              <option value="all">All Videos ({videos.length})</option>
-              {allFolders.map(f => (
-                <option key={f.key} value={f.key}>
-                  {f.label} ({videos.filter(v => v.folder === f.key).length})
-                </option>
-              ))}
-            </select>
+            {/* Row 1: top-level categories */}
+            <div style={{
+              display: 'flex',
+              gap: '8px',
+              overflowX: 'auto',
+              paddingBottom: '10px',
+              scrollbarWidth: 'none',
+            }}>
+              <Chip
+                label="All"
+                count={videos.length}
+                active={mobileParent === 'all'}
+                onClick={() => { setMobileParent('all'); setSelectedFolder('all') }}
+              />
+              {folderStructure.map(folder => {
+                const count = folder.children?.length > 0
+                  ? videos.filter(v => v.folder?.startsWith(folder.key + '-') || v.folder === folder.key).length
+                  : videos.filter(v => v.folder === folder.key).length
+                return (
+                  <Chip
+                    key={folder.key}
+                    label={`${folder.icon} ${folder.label.split(' ')[0]}`}
+                    count={count || null}
+                    active={mobileParent === folder.key}
+                    onClick={() => {
+                      setMobileParent(folder.key)
+                      setSelectedFolder(folder.key)
+                    }}
+                  />
+                )
+              })}
+            </div>
+
+            {/* Row 2: sub-folder chips (only when parent has children) */}
+            {(() => {
+              const parent = folderStructure.find(f => f.key === mobileParent)
+              if (!parent?.children?.length) return null
+              return (
+                <div style={{
+                  display: 'flex',
+                  gap: '8px',
+                  overflowX: 'auto',
+                  paddingBottom: '4px',
+                  scrollbarWidth: 'none',
+                }}>
+                  <Chip
+                    label={`All ${parent.label.split(' ')[0]}`}
+                    count={videos.filter(v => v.folder?.startsWith(parent.key + '-')).length || null}
+                    active={selectedFolder === parent.key}
+                    onClick={() => setSelectedFolder(parent.key)}
+                  />
+                  {parent.children.map(child => (
+                    <Chip
+                      key={child.key}
+                      label={child.label}
+                      count={videos.filter(v => v.folder === child.key).length || null}
+                      active={selectedFolder === child.key}
+                      onClick={() => setSelectedFolder(child.key)}
+                    />
+                  ))}
+                </div>
+              )
+            })()}
           </div>
         )}
 
