@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { supabase } from '../supabase'
+import { db } from '../firebase'
+import { collection, getDocs, doc, deleteDoc, query, orderBy } from 'firebase/firestore'
 import { colors, fonts, radius, shadow } from '../theme'
 import { useIsMobile } from '../hooks/useWindowWidth'
 import { useMembers } from '../hooks/useMembers'
@@ -60,16 +61,16 @@ export default function VideoLibrary() {
 
   async function loadVideos() {
     setLoading(true)
-    const { data, error } = await supabase
-      .from('videos')
-      .select('*')
-      .order('added_at', { ascending: false })
-    if (!error) setVideos(data || [])
+    try {
+      const q = query(collection(db, 'videos'), orderBy('added_at', 'desc'))
+      const snap = await getDocs(q)
+      setVideos(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    } catch {}
     setLoading(false)
   }
 
   async function handleDelete(id) {
-    await supabase.from('videos').delete().eq('id', id)
+    await deleteDoc(doc(db, 'videos', id))
     setVideos(prev => prev.filter(v => v.id !== id))
   }
 

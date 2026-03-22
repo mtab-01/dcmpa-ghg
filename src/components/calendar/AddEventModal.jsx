@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { supabase } from '../../supabase'
+import { db } from '../../firebase'
+import { collection, addDoc, doc, updateDoc } from 'firebase/firestore'
 import { colors } from '../../theme'
 import Modal from '../ui/Modal'
 import Button from '../ui/Button'
@@ -37,41 +38,20 @@ export default function AddEventModal({ onClose, onAdded, onEdited, defaultDate,
       notes: form.notes.trim() || null,
     }
 
-    if (isEdit) {
-      const { data, error: err } = await supabase
-        .from('events')
-        .update(payload)
-        .eq('id', existingEvent.id)
-        .select()
-        .single()
-
-      setLoading(false)
-      if (err) {
-        setError(err.message)
+    try {
+      if (isEdit) {
+        await updateDoc(doc(db, 'events', existingEvent.id), payload)
+        onEdited({ id: existingEvent.id, ...payload })
+        onClose()
       } else {
-        onEdited(data)
+        const docRef = await addDoc(collection(db, 'events'), payload)
+        onAdded({ id: docRef.id, ...payload })
         onClose()
       }
-    } else {
-      const { data, error: err } = await supabase
-        .from('events')
-        .insert([payload])
-        .select()
-        .single()
-
-      setLoading(false)
-      if (err) {
-        const msg = err.message || ''
-        if (msg.toLowerCase().includes('fetch') || msg.toLowerCase().includes('network')) {
-          setError('Cannot reach database. Your Supabase project may be paused — visit supabase.com to resume it.')
-        } else {
-          setError(err.message)
-        }
-      } else {
-        onAdded(data)
-        onClose()
-      }
+    } catch (err) {
+      setError(err.message || 'Failed to save. Check your connection.')
     }
+    setLoading(false)
   }
 
   return (

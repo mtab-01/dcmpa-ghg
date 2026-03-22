@@ -1,5 +1,9 @@
 import { useState, useEffect } from 'react'
-import { supabase } from '../supabase'
+import { db } from '../firebase'
+import {
+  collection, getDocs, doc, setDoc, deleteDoc,
+  query, where, orderBy, getCountFromServer,
+} from 'firebase/firestore'
 import { colors, fonts, radius, shadow } from '../theme'
 import { useIsMobile } from '../hooks/useWindowWidth'
 import { DEFAULT_MEMBERS } from '../constants'
@@ -145,12 +149,17 @@ export default function Home({ onNavigate }) {
   // Load member names
   useEffect(() => {
     async function loadMembers() {
-      const { data } = await supabase.from('members').select('position, name').order('position')
-      if (data && data.length > 0) {
-        const arr = [...DEFAULT_MEMBERS]
-        for (const { position, name } of data) arr[position] = name
-        setMembers(arr)
-      }
+      try {
+        const snap = await getDocs(collection(db, 'members'))
+        if (snap.size > 0) {
+          const arr = [...DEFAULT_MEMBERS]
+          snap.docs.forEach(d => {
+            const { position, name } = d.data()
+            if (position >= 0 && position < 12) arr[position] = name
+          })
+          setMembers(arr)
+        }
+      } catch {}
     }
     loadMembers()
   }, [])
@@ -158,60 +167,67 @@ export default function Home({ onNavigate }) {
   useEffect(() => {
     async function fetchStats() {
       const thisMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`
-      const [{ count: videoCount }, { count: eventCount }, { data: expenseData }] = await Promise.all([
-        supabase.from('videos').select('*', { count: 'exact', head: true }),
-        supabase.from('events').select('*', { count: 'exact', head: true }).gte('date', `${thisMonth}-01`),
-        supabase.from('expenses').select('amount'),
-      ])
-      const total = (expenseData || []).reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0)
-      setStats({
-        videos: videoCount ?? '—',
-        events: eventCount ?? '—',
-        expenses: total > 0 ? `$${total.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '$0',
-      })
+      try {
+        const [videosSnap, eventsSnap, expensesSnap] = await Promise.all([
+          getCountFromServer(collection(db, 'videos')),
+          getCountFromServer(query(collection(db, 'events'), where('date', '>=', `${thisMonth}-01`))),
+          getDocs(collection(db, 'expenses')),
+        ])
+        const videoCount = videosSnap.data().count
+        const eventCount = eventsSnap.data().count
+        const total = expensesSnap.docs.reduce((sum, d) => sum + (parseFloat(d.data().amount) || 0), 0)
+        setStats({
+          videos: videoCount,
+          events: eventCount,
+          expenses: total > 0 ? `$${total.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '$0',
+        })
+      } catch {}
     }
 
     async function fetchUpcoming() {
       const cutoff = new Date(today)
       cutoff.setDate(cutoff.getDate() - 14)
       const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`
-      const { data: events, error } = await supabase
-        .from('events')
-        .select('*')
-        .gte('date', cutoffStr)
-        .order('date', { ascending: true })
-        .order('time', { ascending: true })
-        .limit(4)
 
-      if (error || !events || events.length === 0) {
+      try {
+        const q = query(collection(db, 'events'), where('date', '>=', cutoffStr), orderBy('date'))
+        const snap = await getDocs(q)
+        const events = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => a.date.localeCompare(b.date) || (a.time || '').localeCompare(b.time || ''))
+          .slice(0, 4)
+
+        if (events.length === 0) {
+          setUpcomingPractices([])
+          setNextEvent(null)
+          return
+        }
+
+        const ids = events.map(e => e.id)
+        const attQ = query(collection(db, 'attendance'), where('event_id', 'in', ids))
+        const attSnap = await getDocs(attQ)
+
+        const attMap = {}
+        attSnap.docs.forEach(d => {
+          const { event_id, position, response } = d.data()
+          if (!attMap[event_id]) attMap[event_id] = {}
+          attMap[event_id][position] = response
+        })
+
+        const practices = events.map(e => {
+          const att = attMap[e.id] || {}
+          const yes = Object.values(att).filter(v => v === 'yes').length
+          const no = Object.values(att).filter(v => v === 'no').length
+          return { ...e, yes, no, pending: 12 - yes - no, att }
+        })
+
+        setUpcomingPractices(practices)
+        const next = practices.find(p => p.date >= todayStr) ?? null
+        setNextEvent(next)
+      } catch {
         setUpcomingPractices([])
         setNextEvent(null)
-        return
       }
-
-      const ids = events.map(e => e.id)
-      const { data: attendanceRows } = await supabase
-        .from('attendance')
-        .select('event_id, position, response')
-        .in('event_id', ids)
-
-      const attMap = {}
-      for (const row of (attendanceRows || [])) {
-        if (!attMap[row.event_id]) attMap[row.event_id] = {}
-        attMap[row.event_id][row.position] = row.response
-      }
-
-      const practices = events.map(e => {
-        const att = attMap[e.id] || {}
-        const yes = Object.values(att).filter(v => v === 'yes').length
-        const no = Object.values(att).filter(v => v === 'no').length
-        return { ...e, yes, no, pending: 12 - yes - no, att }
-      })
-
-      setUpcomingPractices(practices)
-
-      const next = practices.find(p => p.date >= todayStr) ?? null
-      setNextEvent(next)
     }
 
     fetchStats()
@@ -234,20 +250,18 @@ export default function Home({ onNavigate }) {
     if (myPosition === null || !nextEvent || rsvpSaving) return
     setRsvpSaving(true)
     const newVal = myRsvp === response ? null : response
+    const docId = `${nextEvent.id}_${myPosition}`
 
     if (newVal === null) {
-      await supabase.from('attendance').delete()
-        .eq('event_id', nextEvent.id).eq('position', myPosition)
+      await deleteDoc(doc(db, 'attendance', docId))
     } else {
-      await supabase.from('attendance').upsert(
-        { event_id: nextEvent.id, position: myPosition, response: newVal },
-        { onConflict: 'event_id,position' }
-      )
+      await setDoc(doc(db, 'attendance', docId), {
+        event_id: nextEvent.id, position: myPosition, response: newVal,
+      })
     }
 
     setMyRsvp(newVal)
 
-    // Update counts in-place so the progress bars update immediately
     const updateCounts = (p) => {
       if (p.id !== nextEvent.id) return p
       const att = { ...p.att }
@@ -269,7 +283,6 @@ export default function Home({ onNavigate }) {
     return 'Good evening'
   })()
 
-  // Names of confirmed attendees for social proof
   const goingNames = nextEvent
     ? Object.entries(nextEvent.att || {})
         .filter(([, r]) => r === 'yes')

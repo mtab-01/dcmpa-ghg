@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { supabase } from '../supabase'
+import { db, storage } from '../firebase'
+import { doc, getDoc, setDoc } from 'firebase/firestore'
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { colors, fonts, radius, shadow } from '../theme'
 import { useIsMobile } from '../hooks/useWindowWidth'
 
@@ -61,22 +63,21 @@ export default function Mix() {
 
   async function loadMix() {
     setAudioError(false)
-    const { data, error } = await supabase
-      .from('mix_meta')
-      .select('*')
-      .eq('id', 1)
-      .single()
-
-    if (error || !data) {
+    try {
+      const snap = await getDoc(doc(db, 'mix_meta', 'current'))
+      if (!snap.exists()) {
+        setMixMeta(null)
+        return
+      }
+      const data = snap.data()
+      setMixMeta(data)
+      setAudioUrl(data.download_url)
+      setCurrentTime(0)
+      setDuration(0)
+      setPlaying(false)
+    } catch {
       setMixMeta(null)
-      return
     }
-    setMixMeta(data)
-    const { data: { publicUrl } } = supabase.storage.from('mix').getPublicUrl(data.file_path)
-    setAudioUrl(publicUrl)
-    setCurrentTime(0)
-    setDuration(0)
-    setPlaying(false)
   }
 
   function togglePlay() {
@@ -115,40 +116,33 @@ export default function Mix() {
     setUploadError(null)
 
     const ext = file.name.split('.').pop().toLowerCase()
-    const path = `current.${ext}`
+    const path = `mix/current.${ext}`
 
-    const { error: storageErr } = await supabase.storage
-      .from('mix')
-      .upload(path, file, { upsert: true, contentType: file.type })
+    try {
+      const storageRef = ref(storage, path)
+      await uploadBytes(storageRef, file, { contentType: file.type })
+      const downloadUrl = await getDownloadURL(storageRef)
 
-    if (storageErr) {
-      setUploadError(`Upload failed: ${storageErr.message}`)
+      const label = versionLabel.trim() ||
+        `Mix — ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+
+      await setDoc(doc(db, 'mix_meta', 'current'), {
+        label,
+        file_path: path,
+        file_name: file.name,
+        uploaded_at: new Date().toISOString(),
+        download_url: downloadUrl,
+      })
+
       setUploading(false)
-      return
-    }
-
-    const label = versionLabel.trim() ||
-      `Mix — ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
-
-    const { error: dbErr } = await supabase.from('mix_meta').upsert({
-      id: 1,
-      label,
-      file_path: path,
-      file_name: file.name,
-      uploaded_at: new Date().toISOString(),
-    })
-
-    if (dbErr) {
-      setUploadError(`Metadata save failed: ${dbErr.message}`)
+      setShowUpload(false)
+      setVersionLabel('')
+      e.target.value = ''
+      loadMix()
+    } catch (err) {
+      setUploadError(`Upload failed: ${err.message}`)
       setUploading(false)
-      return
     }
-
-    setUploading(false)
-    setShowUpload(false)
-    setVersionLabel('')
-    e.target.value = ''
-    loadMix()
   }
 
   const pct = duration > 0 ? (currentTime / duration) * 100 : 0
@@ -409,7 +403,7 @@ export default function Mix() {
 
             {audioError && (
               <p style={{ textAlign: 'center', color: colors.red, fontSize: '0.8rem', marginTop: '12px' }}>
-                Could not load audio. Check that the storage bucket is public.
+                Could not load audio. Check that Firebase Storage rules allow public reads.
               </p>
             )}
           </div>
@@ -453,7 +447,6 @@ export default function Mix() {
           borderRadius: radius.xl,
           boxShadow: shadow.card,
           padding: '24px',
-          marginTop: mixMeta ? '0' : '0',
         }}>
           <p style={{
             fontFamily: fonts.heading,
@@ -546,30 +539,6 @@ export default function Mix() {
           <p style={{ fontSize: '0.73rem', color: colors.textMuted, marginTop: '10px' }}>
             Supports MP3, M4A, WAV, OGG. Uploading replaces the previous mix.
           </p>
-
-          {!mixMeta && (
-            <details style={{ marginTop: '16px' }}>
-              <summary style={{ fontSize: '0.78rem', color: colors.textMuted, cursor: 'pointer' }}>
-                Supabase setup required ▸
-              </summary>
-              <div style={{
-                marginTop: '10px',
-                background: colors.bg,
-                border: `1px solid ${colors.border}`,
-                borderRadius: radius.md,
-                padding: '12px',
-                fontSize: '0.78rem',
-                color: colors.creamDim,
-                lineHeight: 1.7,
-              }}>
-                <strong>1.</strong> In Supabase → Storage, create a bucket named <code>mix</code> and make it <strong>public</strong>.<br />
-                <strong>2.</strong> In Supabase → Table Editor, create a table <code>mix_meta</code> with columns:<br />
-                &nbsp;&nbsp;<code>id</code> int8 primary key, <code>label</code> text, <code>file_path</code> text,<br />
-                &nbsp;&nbsp;<code>file_name</code> text, <code>uploaded_at</code> timestamptz<br />
-                <strong>3.</strong> Set RLS policies to allow anon read/write (or disable RLS for this table).
-              </div>
-            </details>
-          )}
         </div>
       )}
     </div>

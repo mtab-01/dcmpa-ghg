@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
+import { db } from '../../firebase'
+import { collection, getDocs, doc, setDoc, deleteDoc, query, where } from 'firebase/firestore'
 import { colors, fonts, radius, shadow } from '../../theme'
 import { buildGCalUrl } from '../../utils/calendarUrl'
 import { DEFAULT_MEMBERS } from '../../constants'
-import { supabase } from '../../supabase'
 import Button from '../ui/Button'
 import AddEventModal from './AddEventModal'
 
@@ -90,18 +91,16 @@ function EventCard({ event, onEdited }) {
   useEffect(() => {
     if (!showAttendance) return
     setLoadingAttendance(true)
-    supabase
-      .from('attendance')
-      .select('position, response')
-      .eq('event_id', currentEvent.id)
-      .then(({ data }) => {
-        if (data) {
-          const map = {}
-          data.forEach(row => { map[row.position] = row.response })
-          setAttendance(map)
-        }
-        setLoadingAttendance(false)
+    const q = query(collection(db, 'attendance'), where('event_id', '==', currentEvent.id))
+    getDocs(q).then(snap => {
+      const map = {}
+      snap.docs.forEach(d => {
+        const { position, response } = d.data()
+        map[position] = response
       })
+      setAttendance(map)
+      setLoadingAttendance(false)
+    })
   }, [showAttendance, currentEvent.id])
 
   const setResponse = useCallback(async (position, value) => {
@@ -110,10 +109,13 @@ function EventCard({ event, onEdited }) {
 
     setAttendance(prev => ({ ...prev, [position]: newVal }))
 
+    const docId = `${currentEvent.id}_${position}`
     if (newVal) {
-      await supabase.from('attendance').upsert({ event_id: currentEvent.id, position, response: newVal }, { onConflict: 'event_id,position' })
+      await setDoc(doc(db, 'attendance', docId), {
+        event_id: currentEvent.id, position, response: newVal,
+      })
     } else {
-      await supabase.from('attendance').delete().eq('event_id', currentEvent.id).eq('position', position)
+      await deleteDoc(doc(db, 'attendance', docId))
     }
   }, [attendance, currentEvent.id])
 

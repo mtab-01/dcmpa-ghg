@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { supabase } from '../supabase'
+import { db } from '../firebase'
+import { collection, getDocs, query, orderBy } from 'firebase/firestore'
 import { colors, fonts } from '../theme'
 import { useIsMobile } from '../hooks/useWindowWidth'
 import { useMembers } from '../hooks/useMembers'
@@ -22,12 +23,17 @@ export default function ExpenseTracker() {
 
   async function loadExpenses() {
     setLoading(true)
-    const { data, error } = await supabase
-      .from('expenses')
-      .select('*')
-      .order('date', { ascending: false })
-      .order('created_at', { ascending: false })
-    if (!error) setExpenses(data || [])
+    try {
+      const q = query(collection(db, 'expenses'), orderBy('date', 'desc'))
+      const snap = await getDocs(q)
+      const data = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => {
+          if (b.date !== a.date) return b.date.localeCompare(a.date)
+          return (b.created_at || '') > (a.created_at || '') ? 1 : -1
+        })
+      setExpenses(data)
+    } catch {}
     setLoading(false)
   }
 

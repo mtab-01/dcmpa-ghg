@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { supabase } from '../../supabase'
+import { db } from '../../firebase'
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore'
 import { getAllFolders, DEFAULT_MEMBERS } from '../../constants'
 import { colors } from '../../theme'
 import Modal from '../ui/Modal'
@@ -29,23 +30,20 @@ export default function AddVideoModal({ onClose, onAdded, defaultFolder, members
     setLoading(true)
     setError('')
 
-    const { data, error: err } = await supabase
-      .from('videos')
-      .insert([{ title: form.title.trim(), url: form.url.trim(), folder: form.folder, notes: form.notes.trim() }])
-      .select()
-      .single()
-
-    setLoading(false)
-
-    if (err) {
-      const msg = err.message || ''
-      setError(msg.toLowerCase().includes('fetch') || msg.toLowerCase().includes('network')
-        ? 'Cannot reach database. Your Supabase project may be paused — visit supabase.com to resume it.'
-        : msg)
-    } else {
-      onAdded(data)
+    try {
+      const docRef = await addDoc(collection(db, 'videos'), {
+        title: form.title.trim(),
+        url: form.url.trim(),
+        folder: form.folder,
+        notes: form.notes.trim(),
+        added_at: serverTimestamp(),
+      })
+      onAdded({ id: docRef.id, title: form.title.trim(), url: form.url.trim(), folder: form.folder, notes: form.notes.trim() })
       onClose()
+    } catch (err) {
+      setError(err.message || 'Failed to save. Check your connection.')
     }
+    setLoading(false)
   }
 
   return (

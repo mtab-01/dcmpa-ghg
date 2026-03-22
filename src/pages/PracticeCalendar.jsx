@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { supabase } from '../supabase'
+import { db } from '../firebase'
+import { collection, getDocs, query, where } from 'firebase/firestore'
 import { colors, fonts, radius, shadow } from '../theme'
 import { useIsMobile } from '../hooks/useWindowWidth'
 import CalendarGrid from '../components/calendar/CalendarGrid'
@@ -31,15 +32,18 @@ export default function PracticeCalendar() {
     const firstDay = `${year}-${String(month + 1).padStart(2, '0')}-01`
     const lastDay = `${year}-${String(month + 1).padStart(2, '0')}-${new Date(year, month + 1, 0).getDate()}`
 
-    const { data, error } = await supabase
-      .from('events')
-      .select('*')
-      .gte('date', firstDay)
-      .lte('date', lastDay)
-      .order('date', { ascending: true })
-      .order('time', { ascending: true })
-
-    if (!error) setEvents(data || [])
+    try {
+      const q = query(
+        collection(db, 'events'),
+        where('date', '>=', firstDay),
+        where('date', '<=', lastDay),
+      )
+      const snap = await getDocs(q)
+      const data = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => a.date.localeCompare(b.date) || (a.time || '').localeCompare(b.time || ''))
+      setEvents(data)
+    } catch {}
     setLoading(false)
   }
 

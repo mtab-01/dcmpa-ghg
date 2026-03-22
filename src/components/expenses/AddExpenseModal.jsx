@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { supabase } from '../../supabase'
+import { db, storage } from '../../firebase'
+import { collection, addDoc } from 'firebase/firestore'
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { colors, fonts } from '../../theme'
 import { EXPENSE_CATEGORIES } from '../../constants'
 import Modal from '../ui/Modal'
@@ -46,49 +48,40 @@ export default function AddExpenseModal({ onClose, onAdded, members }) {
     if (receiptFile) {
       const ext = receiptFile.name.split('.').pop()
       const filename = `receipt-${Date.now()}.${ext}`
-      const { data: uploadData, error: uploadErr } = await supabase.storage
-        .from('receipts')
-        .upload(filename, receiptFile, { contentType: receiptFile.type })
-
-      if (uploadErr) {
+      try {
+        const storageRef = ref(storage, `receipts/${filename}`)
+        await uploadBytes(storageRef, receiptFile, { contentType: receiptFile.type })
+        receipt_url = await getDownloadURL(storageRef)
+      } catch (uploadErr) {
         setLoading(false)
         return setError(`Receipt upload failed: ${uploadErr.message}`)
       }
-
-      const { data: urlData } = supabase.storage.from('receipts').getPublicUrl(filename)
-      receipt_url = urlData?.publicUrl || null
     }
 
     const splits = form.split_type === 'custom'
       ? Object.fromEntries(members.map(m => [m, parseFloat(customSplits[m]) || 0]))
       : null
 
-    const { data, error: err } = await supabase
-      .from('expenses')
-      .insert([{
-        title: form.title.trim(),
-        amount: totalAmount,
-        date: form.date,
-        paid_by: form.paid_by,
-        category: form.category,
-        split_type: form.split_type,
-        splits,
-        receipt_url,
-      }])
-      .select()
-      .single()
-
-    setLoading(false)
-
-    if (err) {
-      const msg = err.message || ''
-      setError(msg.toLowerCase().includes('fetch') || msg.toLowerCase().includes('network')
-        ? 'Cannot reach database. Your Supabase project may be paused — visit supabase.com to resume it.'
-        : msg)
-    } else {
-      onAdded(data)
-      onClose()
+    const payload = {
+      title: form.title.trim(),
+      amount: totalAmount,
+      date: form.date,
+      paid_by: form.paid_by,
+      category: form.category,
+      split_type: form.split_type,
+      splits,
+      receipt_url,
+      created_at: new Date().toISOString(),
     }
+
+    try {
+      const docRef = await addDoc(collection(db, 'expenses'), payload)
+      onAdded({ id: docRef.id, ...payload })
+      onClose()
+    } catch (err) {
+      setError(err.message || 'Failed to save. Check your connection.')
+    }
+    setLoading(false)
   }
 
   return (
