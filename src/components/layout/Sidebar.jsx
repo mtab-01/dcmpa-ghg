@@ -5,6 +5,7 @@ const NAV_ITEMS = [
   { key: 'videos', label: 'Video Library', icon: '▶' },
   { key: 'calendar', label: 'Practice Calendar', icon: '📅' },
   { key: 'expenses', label: 'Expenses', icon: '💰' },
+  { key: 'mix', label: 'Mix', icon: '🎵' },
   { key: 'settings', label: 'Settings', icon: '⚙' },
 ]
 

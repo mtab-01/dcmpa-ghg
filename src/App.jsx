@@ -8,12 +8,14 @@ import VideoLibrary from './pages/VideoLibrary'
 import PracticeCalendar from './pages/PracticeCalendar'
 import ExpenseTracker from './pages/ExpenseTracker'
 import Settings from './pages/Settings'
+import Mix from './pages/Mix'
 
 const PAGES = {
   home: Home,
   videos: VideoLibrary,
   calendar: PracticeCalendar,
   expenses: ExpenseTracker,
+  mix: Mix,
   settings: Settings,
 }
 

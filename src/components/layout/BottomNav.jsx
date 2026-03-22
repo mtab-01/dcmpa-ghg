@@ -4,6 +4,7 @@ const NAV_ITEMS = [
   { key: 'home', label: 'Home', icon: '🏠' },
   { key: 'videos', label: 'Videos', icon: '▶' },
   { key: 'calendar', label: 'Calendar', icon: '📅' },
+  { key: 'mix', label: 'Mix', icon: '🎵' },
   { key: 'expenses', label: 'Expenses', icon: '💰' },
   { key: 'settings', label: 'Settings', icon: '⚙' },
 ]
