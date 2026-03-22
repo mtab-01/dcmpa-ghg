@@ -2,8 +2,10 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { colors, fonts, radius, shadow } from '../theme'
 import { useIsMobile } from '../hooks/useWindowWidth'
+import { DEFAULT_MEMBERS } from '../constants'
 
 const today = new Date()
+const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
@@ -131,19 +133,37 @@ export default function Home({ onNavigate }) {
   const isMobile = useIsMobile()
   const [stats, setStats] = useState({ videos: '—', events: '—', expenses: '—' })
   const [upcomingPractices, setUpcomingPractices] = useState(null)
+  const [nextEvent, setNextEvent] = useState(undefined) // undefined=loading, null=none, obj=event
+  const [members, setMembers] = useState(DEFAULT_MEMBERS)
+  const [myPosition, setMyPosition] = useState(() => {
+    const s = localStorage.getItem('ghg_my_position')
+    return s !== null ? parseInt(s, 10) : null
+  })
+  const [myRsvp, setMyRsvp] = useState(null) // null=not responded, 'yes', 'no'
+  const [rsvpSaving, setRsvpSaving] = useState(false)
+
+  // Load member names
+  useEffect(() => {
+    async function loadMembers() {
+      const { data } = await supabase.from('members').select('position, name').order('position')
+      if (data && data.length > 0) {
+        const arr = [...DEFAULT_MEMBERS]
+        for (const { position, name } of data) arr[position] = name
+        setMembers(arr)
+      }
+    }
+    loadMembers()
+  }, [])
 
   useEffect(() => {
     async function fetchStats() {
       const thisMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`
-
       const [{ count: videoCount }, { count: eventCount }, { data: expenseData }] = await Promise.all([
         supabase.from('videos').select('*', { count: 'exact', head: true }),
         supabase.from('events').select('*', { count: 'exact', head: true }).gte('date', `${thisMonth}-01`),
         supabase.from('expenses').select('amount'),
       ])
-
       const total = (expenseData || []).reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0)
-
       setStats({
         videos: videoCount ?? '—',
         events: eventCount ?? '—',
@@ -152,7 +172,6 @@ export default function Home({ onNavigate }) {
     }
 
     async function fetchUpcoming() {
-      // Look back 14 days so recently-passed events still appear
       const cutoff = new Date(today)
       cutoff.setDate(cutoff.getDate() - 14)
       const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`
@@ -164,7 +183,11 @@ export default function Home({ onNavigate }) {
         .order('time', { ascending: true })
         .limit(4)
 
-      if (error || !events || events.length === 0) { setUpcomingPractices([]); return }
+      if (error || !events || events.length === 0) {
+        setUpcomingPractices([])
+        setNextEvent(null)
+        return
+      }
 
       const ids = events.map(e => e.id)
       const { data: attendanceRows } = await supabase
@@ -178,17 +201,66 @@ export default function Home({ onNavigate }) {
         attMap[row.event_id][row.position] = row.response
       }
 
-      setUpcomingPractices(events.map(e => {
+      const practices = events.map(e => {
         const att = attMap[e.id] || {}
         const yes = Object.values(att).filter(v => v === 'yes').length
         const no = Object.values(att).filter(v => v === 'no').length
-        return { ...e, yes, no, pending: 12 - yes - no }
-      }))
+        return { ...e, yes, no, pending: 12 - yes - no, att }
+      })
+
+      setUpcomingPractices(practices)
+
+      const next = practices.find(p => p.date >= todayStr) ?? null
+      setNextEvent(next)
     }
 
     fetchStats()
     fetchUpcoming()
   }, [])
+
+  // Derive my RSVP from already-fetched attendance data
+  useEffect(() => {
+    if (myPosition === null || !nextEvent) { setMyRsvp(null); return }
+    setMyRsvp(nextEvent.att?.[myPosition] ?? null)
+  }, [myPosition, nextEvent?.id])
+
+  function saveMyPosition(pos) {
+    const parsed = parseInt(pos, 10)
+    setMyPosition(parsed)
+    localStorage.setItem('ghg_my_position', String(parsed))
+  }
+
+  async function handleMyRsvp(response) {
+    if (myPosition === null || !nextEvent || rsvpSaving) return
+    setRsvpSaving(true)
+    const newVal = myRsvp === response ? null : response
+
+    if (newVal === null) {
+      await supabase.from('attendance').delete()
+        .eq('event_id', nextEvent.id).eq('position', myPosition)
+    } else {
+      await supabase.from('attendance').upsert(
+        { event_id: nextEvent.id, position: myPosition, response: newVal },
+        { onConflict: 'event_id,position' }
+      )
+    }
+
+    setMyRsvp(newVal)
+
+    // Update counts in-place so the progress bars update immediately
+    const updateCounts = (p) => {
+      if (p.id !== nextEvent.id) return p
+      const att = { ...p.att }
+      if (newVal === null) delete att[myPosition]
+      else att[myPosition] = newVal
+      const yes = Object.values(att).filter(v => v === 'yes').length
+      const no = Object.values(att).filter(v => v === 'no').length
+      return { ...p, att, yes, no, pending: 12 - yes - no }
+    }
+    setUpcomingPractices(prev => prev ? prev.map(updateCounts) : prev)
+    setNextEvent(prev => prev ? updateCounts(prev) : prev)
+    setRsvpSaving(false)
+  }
 
   const greeting = (() => {
     const h = today.getHours()
@@ -197,11 +269,19 @@ export default function Home({ onNavigate }) {
     return 'Good evening'
   })()
 
+  // Names of confirmed attendees for social proof
+  const goingNames = nextEvent
+    ? Object.entries(nextEvent.att || {})
+        .filter(([, r]) => r === 'yes')
+        .map(([pos]) => members[parseInt(pos)])
+        .filter(Boolean)
+    : []
+
   return (
     <div style={{ padding: isMobile ? '24px 16px' : '36px 36px', maxWidth: '860px' }}>
 
       {/* Header */}
-      <div style={{ marginBottom: isMobile ? '28px' : '36px' }}>
+      <div style={{ marginBottom: isMobile ? '24px' : '28px' }}>
         <p style={{
           fontSize: '0.82rem',
           color: colors.textMuted,
@@ -229,6 +309,137 @@ export default function Home({ onNavigate }) {
         </p>
       </div>
 
+      {/* ── Quick RSVP Card ── */}
+      {nextEvent !== undefined && nextEvent !== null && (
+        <div style={{
+          background: colors.surface,
+          border: `1px solid ${colors.border}`,
+          borderRadius: radius.xl,
+          boxShadow: shadow.card,
+          padding: '20px 24px',
+          marginBottom: isMobile ? '24px' : '32px',
+          borderLeft: `4px solid ${colors.gold}`,
+        }}>
+          {/* Event info */}
+          <div style={{ marginBottom: '14px' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap', marginBottom: '4px' }}>
+              <span style={{
+                fontFamily: fonts.heading,
+                fontWeight: 800,
+                fontSize: isMobile ? '1.05rem' : '1.15rem',
+                color: colors.cream,
+              }}>
+                {nextEvent.title}
+              </span>
+              <span style={{ fontSize: '0.78rem', color: colors.textMuted }}>
+                {formatShortDate(nextEvent.date)}
+                {nextEvent.time ? ` · ${formatTime12(nextEvent.time)}` : ''}
+                {nextEvent.end_time ? ` – ${formatTime12(nextEvent.end_time)}` : ''}
+              </span>
+            </div>
+            {nextEvent.location && (
+              <div style={{ fontSize: '0.78rem', color: colors.textMuted }}>
+                📍 {nextEvent.location}
+              </div>
+            )}
+          </div>
+
+          {/* Social proof */}
+          <div style={{ marginBottom: '16px' }}>
+            <div style={{ fontSize: '0.8rem', color: colors.textMuted, marginBottom: goingNames.length > 0 ? '4px' : 0 }}>
+              <span style={{ color: colors.green, fontWeight: 600 }}>✓ {nextEvent.yes}</span>
+              {' going · '}
+              <span style={{ color: colors.red, fontWeight: 600 }}>✗ {nextEvent.no}</span>
+              {' out · '}
+              <span>{nextEvent.pending} pending</span>
+            </div>
+            {goingNames.length > 0 && (
+              <div style={{ fontSize: '0.75rem', color: colors.textMuted }}>
+                {goingNames.slice(0, 3).join(', ')}
+                {goingNames.length > 3 ? ` +${goingNames.length - 3} more` : ''}
+              </div>
+            )}
+          </div>
+
+          {/* Identity picker */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.78rem', color: colors.textMuted, whiteSpace: 'nowrap' }}>
+              {myPosition === null ? 'Who are you?' : 'You are:'}
+            </span>
+            <select
+              value={myPosition ?? ''}
+              onChange={e => e.target.value !== '' && saveMyPosition(e.target.value)}
+              style={{
+                fontFamily: fonts.body,
+                fontSize: '0.82rem',
+                color: myPosition === null ? colors.textMuted : colors.cream,
+                background: colors.surfaceHover,
+                border: `1px solid ${colors.border}`,
+                borderRadius: radius.md,
+                padding: '4px 8px',
+                cursor: 'pointer',
+                outline: 'none',
+              }}
+            >
+              {myPosition === null && <option value="">Pick your name…</option>}
+              {members.map((name, i) => (
+                <option key={i} value={i}>{name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* RSVP buttons */}
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button
+              onClick={() => handleMyRsvp('yes')}
+              disabled={myPosition === null || rsvpSaving}
+              style={{
+                flex: 1,
+                padding: '12px 16px',
+                borderRadius: radius.lg,
+                border: `2px solid ${myRsvp === 'yes' ? colors.green : colors.border}`,
+                background: myRsvp === 'yes' ? colors.green : 'transparent',
+                color: myRsvp === 'yes' ? '#fff' : colors.cream,
+                fontFamily: fonts.heading,
+                fontWeight: 700,
+                fontSize: '0.95rem',
+                cursor: myPosition === null ? 'not-allowed' : 'pointer',
+                opacity: myPosition === null ? 0.5 : 1,
+                transition: 'all 0.15s ease',
+              }}
+            >
+              ✓ I'm in!
+            </button>
+            <button
+              onClick={() => handleMyRsvp('no')}
+              disabled={myPosition === null || rsvpSaving}
+              style={{
+                flex: 1,
+                padding: '12px 16px',
+                borderRadius: radius.lg,
+                border: `2px solid ${myRsvp === 'no' ? colors.red : colors.border}`,
+                background: myRsvp === 'no' ? colors.red : 'transparent',
+                color: myRsvp === 'no' ? '#fff' : colors.cream,
+                fontFamily: fonts.heading,
+                fontWeight: 700,
+                fontSize: '0.95rem',
+                cursor: myPosition === null ? 'not-allowed' : 'pointer',
+                opacity: myPosition === null ? 0.5 : 1,
+                transition: 'all 0.15s ease',
+              }}
+            >
+              ✗ Can't make it
+            </button>
+          </div>
+
+          {myRsvp && (
+            <p style={{ marginTop: '10px', fontSize: '0.75rem', color: colors.textMuted, textAlign: 'center' }}>
+              {myRsvp === 'yes' ? '✓ You\'re confirmed! Tap again to undo.' : '✗ Marked as out. Tap again to undo.'}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Stats */}
       <div style={{
         display: 'flex',
@@ -241,7 +452,7 @@ export default function Home({ onNavigate }) {
         <StatCard icon="💰" label="Total spent" value={stats.expenses} accent={colors.green} />
       </div>
 
-      {/* Upcoming Attendance Widget — always rendered */}
+      {/* Upcoming Attendance Widget */}
       <div style={{ marginBottom: isMobile ? '28px' : '36px' }}>
         <p style={{
           fontFamily: fonts.mono,
@@ -275,6 +486,7 @@ export default function Home({ onNavigate }) {
             const yesWidth = (practice.yes / 12) * 100
             const noWidth = (practice.no / 12) * 100
             const pendingWidth = (practice.pending / 12) * 100
+            const isNext = nextEvent && practice.id === nextEvent.id
             return (
               <div
                 key={practice.id}
@@ -283,15 +495,31 @@ export default function Home({ onNavigate }) {
                   padding: '14px 20px',
                   borderBottom: idx < upcomingPractices.length - 1 ? `1px solid ${colors.border}` : 'none',
                   cursor: 'pointer',
+                  background: isNext ? `${colors.gold}08` : 'transparent',
                 }}
                 onMouseEnter={e => { e.currentTarget.style.background = colors.surfaceHover }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+                onMouseLeave={e => { e.currentTarget.style.background = isNext ? `${colors.gold}08` : 'transparent' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                   <div>
                     <span style={{ fontFamily: fonts.heading, fontSize: '0.9rem', color: colors.cream, fontWeight: 700 }}>
                       {practice.title}
                     </span>
+                    {isNext && (
+                      <span style={{
+                        marginLeft: '8px',
+                        fontSize: '0.65rem',
+                        fontWeight: 700,
+                        color: colors.gold,
+                        background: `${colors.gold}18`,
+                        borderRadius: radius.sm,
+                        padding: '2px 6px',
+                        letterSpacing: '0.04em',
+                        textTransform: 'uppercase',
+                      }}>
+                        Next
+                      </span>
+                    )}
                     <span style={{ color: colors.textMuted, fontSize: '0.75rem', marginLeft: '10px' }}>
                       {formatShortDate(practice.date)}
                       {practice.time ? ` · ${formatTime12(practice.time)}` : ''}
