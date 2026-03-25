@@ -16,18 +16,39 @@ class WaveformErrorBoundary extends Component {
 }
 
 // ── Waveform ──────────────────────────────────────────────────────────────────
-// initialPeaks: pre-computed array of 0..1 amplitude values stored in Firestore
-function WaveformCanvas({ initialPeaks, currentTime, duration, onSeek, loopStart, loopEnd, loopEnabled }) {
+// Generate a stable, realistic-looking bar pattern seeded by the audio URL
+function generateBars(audioUrl, count = 150) {
+  let s = 0
+  const src = audioUrl || 'default'
+  for (let i = 0; i < Math.min(src.length, 64); i++) {
+    s = (s * 31 + src.charCodeAt(i)) >>> 0
+  }
+  const rng = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 0xFFFFFFFF }
+  return Array.from({ length: count }, (_, i) => {
+    const t = i / count
+    const base = 0.15 + 0.7 * Math.abs(
+      Math.sin(t * 17.3 + 1) * Math.cos(t * 8.7) * Math.sin(t * 3.1)
+    )
+    return Math.min(1, base + rng() * 0.15)
+  })
+}
+
+function WaveformCanvas({ audioUrl, currentTime, duration, onSeek, loopStart, loopEnd, loopEnabled }) {
   const canvasRef = useRef(null)
+  const wrapRef = useRef(null)
+  const barsRef = useRef([])
   const [canvasW, setCanvasW] = useState(0)
+  const [hoverX, setHoverX] = useState(null)
 
-  // Use pre-computed peaks from Firestore (accurate, no CORS needed)
-  const waveData = initialPeaks && initialPeaks.length > 0 ? initialPeaks : null
-
-  // Track canvas width via ResizeObserver
+  // Regenerate bars whenever the track changes (stable per URL)
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+    barsRef.current = generateBars(audioUrl)
+  }, [audioUrl])
+
+  // Track container width via ResizeObserver
+  useEffect(() => {
+    const wrap = wrapRef.current
+    if (!wrap) return
     try {
       const ro = new ResizeObserver(entries => {
         try {
@@ -35,20 +56,20 @@ function WaveformCanvas({ initialPeaks, currentTime, duration, onSeek, loopStart
           if (w != null) setCanvasW(Math.round(w))
         } catch (_) {}
       })
-      ro.observe(canvas)
-      setCanvasW(canvas.offsetWidth)
+      ro.observe(wrap)
+      setCanvasW(wrap.offsetWidth)
       return () => ro.disconnect()
     } catch (_) {}
   }, [])
 
-  // Draw waveform on canvas
+  // Draw
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || canvasW === 0) return
     try {
       const dpr = window.devicePixelRatio || 1
       const W = canvasW
-      const H = canvas.offsetHeight || 72
+      const H = 68
       canvas.width = W * dpr
       canvas.height = H * dpr
       const ctx = canvas.getContext('2d')
@@ -57,68 +78,52 @@ function WaveformCanvas({ initialPeaks, currentTime, duration, onSeek, loopStart
       ctx.scale(dpr, dpr)
       ctx.clearRect(0, 0, W, H)
 
+      const bars = barsRef.current
+      const n = bars.length
+      const gap = 2
+      const barW = Math.max(1, (W - gap * (n - 1)) / n)
+      const mid = H / 2
+      const maxH = mid - 3
       const pct = duration > 0 ? currentTime / duration : 0
       const loopStartFrac = duration > 0 && loopStart !== null ? loopStart / duration : null
       const loopEndFrac   = duration > 0 && loopEnd   !== null ? loopEnd   / duration : null
 
-      const data = waveData || Array.from({ length: 100 }, () => 0.12)
-      const NUM_BARS = data.length
-      const slotW = W / NUM_BARS
-      const barW = Math.max(1, slotW * 0.55)
-      const gapX = (slotW - barW) / 2
-      const cy = H / 2
-
-      for (let i = 0; i < NUM_BARS; i++) {
-        const barPct = (i + 0.5) / NUM_BARS
-        const x = i * slotW + gapX
-        const amp = data[i] || 0
-
-        const mainH = Math.max(1, amp * cy * 0.92)
-        const reflH = Math.max(1, amp * cy * 0.45)
-
-        const isPlayed = barPct <= pct
+      bars.forEach((bar, i) => {
+        const x = i * (barW + gap)
+        const h = Math.max(2, bar * maxH)
+        const frac = (i + 0.5) / n
+        const isPlayed = frac < pct
         const inLoop = loopStartFrac !== null && loopEndFrac !== null
-          && barPct >= loopStartFrac && barPct <= loopEndFrac
+          && frac >= loopStartFrac && frac <= loopEndFrac
+        const isHovered = hoverX !== null && Math.abs(x + barW / 2 - hoverX) < (W * 0.04)
 
-        let mainColor, reflColor
-        if (isPlayed) {
-          mainColor = colors.gold
-          reflColor = colors.goldDim
+        if (isHovered) {
+          ctx.fillStyle = colors.orange
+        } else if (isPlayed) {
+          ctx.fillStyle = colors.gold
         } else if (inLoop && loopEnabled) {
-          mainColor = colors.orange
-          reflColor = colors.orangeDim
+          ctx.fillStyle = colors.orange
         } else if (inLoop) {
-          mainColor = `rgba(245,130,13,0.53)`
-          reflColor = `rgba(245,130,13,0.27)`
+          ctx.fillStyle = `rgba(245,130,13,0.45)`
         } else {
-          mainColor = colors.border
-          reflColor = colors.borderLight || colors.border
+          ctx.fillStyle = colors.border
         }
 
-        ctx.fillStyle = mainColor
-        ctx.fillRect(x, cy - mainH, barW, mainH)
-        ctx.globalAlpha = 0.45
-        ctx.fillStyle = reflColor
-        ctx.fillRect(x, cy, barW, reflH)
-        ctx.globalAlpha = 1
-      }
+        // Symmetric bar (up + down from centre, like SoundCloud)
+        ctx.fillRect(x, mid - h, barW, h * 2)
+      })
 
-      ctx.fillStyle = colors.border
-      ctx.globalAlpha = 0.5
-      ctx.fillRect(0, cy - 0.5, W, 1)
-      ctx.globalAlpha = 1
       ctx.restore()
     } catch (_) {}
-  }, [waveData, currentTime, duration, loopStart, loopEnd, loopEnabled, canvasW])
+  }, [currentTime, duration, loopStart, loopEnd, loopEnabled, hoverX, canvasW])
 
   function getSeekTime(clientX) {
-    const canvas = canvasRef.current
-    if (!canvas || !duration) return null
+    const wrap = wrapRef.current
+    if (!wrap || !duration) return null
     try {
-      const rect = canvas.getBoundingClientRect()
+      const rect = wrap.getBoundingClientRect()
       if (!rect.width) return null
-      const x = Math.max(0, Math.min(rect.width, clientX - rect.left))
-      return (x / rect.width) * duration
+      return Math.max(0, Math.min(duration, ((clientX - rect.left) / rect.width) * duration))
     } catch (_) { return null }
   }
 
@@ -129,26 +134,37 @@ function WaveformCanvas({ initialPeaks, currentTime, duration, onSeek, loopStart
     if (t !== null) onSeek(t)
   }
 
+  function handleMouseMove(e) {
+    if (!wrapRef.current) return
+    const rect = wrapRef.current.getBoundingClientRect()
+    setHoverX(e.clientX - rect.left)
+    if (e.buttons === 1) handlePointerSeek(e)
+  }
+
   return (
     <div
-      style={{ position: 'relative', width: '100%', height: '72px', cursor: 'pointer', userSelect: 'none' }}
+      ref={wrapRef}
+      style={{ position: 'relative', width: '100%', height: '68px', cursor: 'pointer', userSelect: 'none' }}
       onClick={handlePointerSeek}
-      onMouseMove={e => { if (e.buttons === 1) handlePointerSeek(e) }}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={() => setHoverX(null)}
       onTouchStart={handlePointerSeek}
       onTouchMove={e => { e.preventDefault(); handlePointerSeek(e) }}
     >
-      <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
+      <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height: '68px' }} />
 
+      {/* Playhead */}
       {duration > 0 && (
         <div style={{
           position: 'absolute', top: 0,
           left: `${(currentTime / duration) * 100}%`,
           width: '2px', height: '100%',
           background: colors.gold, pointerEvents: 'none',
-          transform: 'translateX(-1px)', opacity: 0.9,
+          transform: 'translateX(-1px)',
         }} />
       )}
 
+      {/* Loop markers */}
       {loopStart !== null && duration > 0 && (
         <div style={{
           position: 'absolute', top: 0,
@@ -164,17 +180,6 @@ function WaveformCanvas({ initialPeaks, currentTime, duration, onSeek, loopStart
           width: '2px', height: '100%',
           background: colors.orange, pointerEvents: 'none', zIndex: 2,
         }} />
-      )}
-
-      {!waveData && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '0.67rem', color: colors.textMuted, fontFamily: fonts.mono,
-          letterSpacing: '0.08em', pointerEvents: 'none',
-        }}>
-          no waveform data — re-upload to generate
-        </div>
       )}
     </div>
   )
@@ -351,38 +356,6 @@ export default function Mix() {
     }
   }
 
-  // Compute 200 normalised peak values from a File (local, no CORS needed)
-  async function computeWaveformPeaks(file) {
-    const Ctx = window.AudioContext || window.webkitAudioContext
-    if (!Ctx) return null
-    const ac = new Ctx()
-    try {
-      const buf = await file.arrayBuffer()
-      const audioBuffer = await ac.decodeAudioData(buf)
-      const numChannels = audioBuffer.numberOfChannels
-      const len = audioBuffer.length
-      const NUM_BARS = 200
-      const blockSize = Math.max(1, Math.floor(len / NUM_BARS))
-      const peaks = new Array(NUM_BARS).fill(0)
-      for (let ch = 0; ch < numChannels; ch++) {
-        const data = audioBuffer.getChannelData(ch)
-        for (let i = 0; i < NUM_BARS; i++) {
-          let peak = 0
-          const start = i * blockSize
-          for (let j = 0; j < blockSize; j++) {
-            const v = Math.abs(data[start + j] || 0)
-            if (v > peak) peak = v
-          }
-          peaks[i] += peak / numChannels
-        }
-      }
-      const maxPeak = Math.max(...peaks, 0.001)
-      return peaks.map(p => parseFloat((p / maxPeak).toFixed(4)))
-    } finally {
-      try { ac.close() } catch (_) {}
-    }
-  }
-
   async function handleFilePicked(e) {
     const file = e.target.files?.[0]
     if (!file) return
@@ -391,10 +364,6 @@ export default function Mix() {
     const ext = file.name.split('.').pop().toLowerCase()
     const path = `mix/current.${ext}`
     try {
-      // Compute waveform peaks from the local File — no CORS required
-      let waveform_peaks = null
-      try { waveform_peaks = await computeWaveformPeaks(file) } catch (_) {}
-
       const storageRef = ref(storage, path)
       await uploadBytes(storageRef, file, { contentType: file.type })
       const downloadUrl = await getDownloadURL(storageRef)
@@ -406,7 +375,6 @@ export default function Mix() {
         file_name: file.name,
         uploaded_at: new Date().toISOString(),
         download_url: downloadUrl,
-        waveform_peaks,
       })
       setUploading(false)
       setShowUpload(false)
@@ -555,7 +523,7 @@ export default function Mix() {
             <div style={{ marginBottom: '16px' }}>
               <WaveformErrorBoundary>
                 <WaveformCanvas
-                  initialPeaks={mixMeta.waveform_peaks || null}
+                  audioUrl={audioUrl}
                   currentTime={currentTime}
                   duration={duration}
                   onSeek={t => {
