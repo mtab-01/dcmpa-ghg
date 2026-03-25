@@ -16,11 +16,13 @@ class WaveformErrorBoundary extends Component {
 }
 
 // ── Waveform ──────────────────────────────────────────────────────────────────
-function WaveformCanvas({ audioUrl, currentTime, duration, onSeek, loopStart, loopEnd, loopEnabled }) {
+// initialPeaks: pre-computed array of 0..1 amplitude values stored in Firestore
+function WaveformCanvas({ initialPeaks, currentTime, duration, onSeek, loopStart, loopEnd, loopEnabled }) {
   const canvasRef = useRef(null)
-  const [waveData, setWaveData] = useState(null)
-  const [waveLoading, setWaveLoading] = useState(false)
   const [canvasW, setCanvasW] = useState(0)
+
+  // Use pre-computed peaks from Firestore (accurate, no CORS needed)
+  const waveData = initialPeaks && initialPeaks.length > 0 ? initialPeaks : null
 
   // Track canvas width via ResizeObserver
   useEffect(() => {
@@ -38,57 +40,6 @@ function WaveformCanvas({ audioUrl, currentTime, duration, onSeek, loopStart, lo
       return () => ro.disconnect()
     } catch (_) {}
   }, [])
-
-  // Fetch and decode audio to extract real peak amplitudes
-  useEffect(() => {
-    if (!audioUrl) return
-    let cancelled = false
-    setWaveLoading(true)
-    setWaveData(null)
-
-    const run = async () => {
-      try {
-        const Ctx = window.AudioContext || window.webkitAudioContext
-        if (!Ctx) return
-        const ac = new Ctx()
-        try {
-          const response = await fetch(audioUrl)
-          const buf = await response.arrayBuffer()
-          const audioBuffer = await ac.decodeAudioData(buf)
-          if (cancelled) return
-          const numChannels = audioBuffer.numberOfChannels
-          const len = audioBuffer.length
-          const NUM_BARS = 200
-          const blockSize = Math.max(1, Math.floor(len / NUM_BARS))
-          const peaks = new Array(NUM_BARS).fill(0)
-          for (let ch = 0; ch < numChannels; ch++) {
-            const data = audioBuffer.getChannelData(ch)
-            for (let i = 0; i < NUM_BARS; i++) {
-              let peak = 0
-              const start = i * blockSize
-              for (let j = 0; j < blockSize; j++) {
-                const v = Math.abs(data[start + j] || 0)
-                if (v > peak) peak = v
-              }
-              peaks[i] += peak / numChannels
-            }
-          }
-          const maxPeak = Math.max(...peaks, 0.001)
-          if (!cancelled) {
-            setWaveData(peaks.map(p => p / maxPeak))
-            setWaveLoading(false)
-          }
-        } finally {
-          try { ac.close() } catch (_) {}
-        }
-      } catch (_) {
-        if (!cancelled) setWaveLoading(false)
-      }
-    }
-
-    run()
-    return () => { cancelled = true }
-  }, [audioUrl])
 
   // Draw waveform on canvas
   useEffect(() => {
@@ -215,14 +166,14 @@ function WaveformCanvas({ audioUrl, currentTime, duration, onSeek, loopStart, lo
         }} />
       )}
 
-      {waveLoading && (
+      {!waveData && (
         <div style={{
           position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: '0.67rem', color: colors.textMuted, fontFamily: fonts.mono,
           letterSpacing: '0.08em', pointerEvents: 'none',
         }}>
-          analyzing audio…
+          no waveform data — re-upload to generate
         </div>
       )}
     </div>
@@ -400,6 +351,38 @@ export default function Mix() {
     }
   }
 
+  // Compute 200 normalised peak values from a File (local, no CORS needed)
+  async function computeWaveformPeaks(file) {
+    const Ctx = window.AudioContext || window.webkitAudioContext
+    if (!Ctx) return null
+    const ac = new Ctx()
+    try {
+      const buf = await file.arrayBuffer()
+      const audioBuffer = await ac.decodeAudioData(buf)
+      const numChannels = audioBuffer.numberOfChannels
+      const len = audioBuffer.length
+      const NUM_BARS = 200
+      const blockSize = Math.max(1, Math.floor(len / NUM_BARS))
+      const peaks = new Array(NUM_BARS).fill(0)
+      for (let ch = 0; ch < numChannels; ch++) {
+        const data = audioBuffer.getChannelData(ch)
+        for (let i = 0; i < NUM_BARS; i++) {
+          let peak = 0
+          const start = i * blockSize
+          for (let j = 0; j < blockSize; j++) {
+            const v = Math.abs(data[start + j] || 0)
+            if (v > peak) peak = v
+          }
+          peaks[i] += peak / numChannels
+        }
+      }
+      const maxPeak = Math.max(...peaks, 0.001)
+      return peaks.map(p => parseFloat((p / maxPeak).toFixed(4)))
+    } finally {
+      try { ac.close() } catch (_) {}
+    }
+  }
+
   async function handleFilePicked(e) {
     const file = e.target.files?.[0]
     if (!file) return
@@ -408,6 +391,10 @@ export default function Mix() {
     const ext = file.name.split('.').pop().toLowerCase()
     const path = `mix/current.${ext}`
     try {
+      // Compute waveform peaks from the local File — no CORS required
+      let waveform_peaks = null
+      try { waveform_peaks = await computeWaveformPeaks(file) } catch (_) {}
+
       const storageRef = ref(storage, path)
       await uploadBytes(storageRef, file, { contentType: file.type })
       const downloadUrl = await getDownloadURL(storageRef)
@@ -419,6 +406,7 @@ export default function Mix() {
         file_name: file.name,
         uploaded_at: new Date().toISOString(),
         download_url: downloadUrl,
+        waveform_peaks,
       })
       setUploading(false)
       setShowUpload(false)
@@ -567,7 +555,7 @@ export default function Mix() {
             <div style={{ marginBottom: '16px' }}>
               <WaveformErrorBoundary>
                 <WaveformCanvas
-                  audioUrl={audioUrl}
+                  initialPeaks={mixMeta.waveform_peaks || null}
                   currentTime={currentTime}
                   duration={duration}
                   onSeek={t => {
