@@ -194,7 +194,7 @@ function WaveformCanvas({ audioUrl, currentTime, duration, onSeek, loopStart, lo
       )}
 
       {/* Loop markers */}
-      {loopStartPct !== null && duration > 0 && (
+      {loopStart !== null && duration > 0 && (
         <div style={{
           position: 'absolute', top: 0,
           left: `${(loopStart / duration) * 100}%`,
