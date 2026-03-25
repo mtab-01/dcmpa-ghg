@@ -1,28 +1,42 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, Component } from 'react'
 import { db, storage } from '../firebase'
 import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { colors, fonts, radius, shadow } from '../theme'
 import { useIsMobile } from '../hooks/useWindowWidth'
 
+// ── Waveform error boundary ───────────────────────────────────────────────────
+class WaveformErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { err: false } }
+  static getDerivedStateFromError() { return { err: true } }
+  render() {
+    if (this.state.err) return null   // fail silently – don't crash the page
+    return this.props.children
+  }
+}
+
 // ── Waveform ──────────────────────────────────────────────────────────────────
 function WaveformCanvas({ audioUrl, currentTime, duration, onSeek, loopStart, loopEnd, loopEnabled }) {
   const canvasRef = useRef(null)
   const [waveData, setWaveData] = useState(null)
   const [waveLoading, setWaveLoading] = useState(false)
-  const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 })
+  const [canvasW, setCanvasW] = useState(0)
 
-  // ResizeObserver to track canvas element size for hi-DPI draws
+  // Track canvas width via ResizeObserver
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const ro = new ResizeObserver(entries => {
-      const { width, height } = entries[0].contentRect
-      setCanvasSize({ w: Math.round(width), h: Math.round(height) })
-    })
-    ro.observe(canvas)
-    setCanvasSize({ w: canvas.offsetWidth, h: canvas.offsetHeight })
-    return () => ro.disconnect()
+    try {
+      const ro = new ResizeObserver(entries => {
+        try {
+          const w = entries[0]?.contentRect?.width
+          if (w != null) setCanvasW(Math.round(w))
+        } catch (_) {}
+      })
+      ro.observe(canvas)
+      setCanvasW(canvas.offsetWidth)
+      return () => ro.disconnect()
+    } catch (_) {}
   }, [])
 
   // Fetch and decode audio to extract real peak amplitudes
@@ -32,176 +46,164 @@ function WaveformCanvas({ audioUrl, currentTime, duration, onSeek, loopStart, lo
     setWaveLoading(true)
     setWaveData(null)
 
-    const Ctx = window.AudioContext || window.webkitAudioContext
-    if (!Ctx) { setWaveLoading(false); return }
-    const ac = new Ctx()
-
-    fetch(audioUrl)
-      .then(r => r.arrayBuffer())
-      .then(buf => ac.decodeAudioData(buf))
-      .then(audioBuffer => {
-        ac.close()
-        if (cancelled) return
-        // Use the first channel; for stereo mix both channels by averaging
-        const numChannels = audioBuffer.numberOfChannels
-        const len = audioBuffer.length
-        const NUM_BARS = 200
-        const blockSize = Math.floor(len / NUM_BARS)
-        const peaks = new Array(NUM_BARS).fill(0)
-
-        for (let ch = 0; ch < numChannels; ch++) {
-          const data = audioBuffer.getChannelData(ch)
-          for (let i = 0; i < NUM_BARS; i++) {
-            let peak = 0
-            const start = i * blockSize
-            for (let j = 0; j < blockSize; j++) {
-              const v = Math.abs(data[start + j])
-              if (v > peak) peak = v
+    const run = async () => {
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext
+        if (!Ctx) return
+        const ac = new Ctx()
+        try {
+          const response = await fetch(audioUrl)
+          const buf = await response.arrayBuffer()
+          const audioBuffer = await ac.decodeAudioData(buf)
+          if (cancelled) return
+          const numChannels = audioBuffer.numberOfChannels
+          const len = audioBuffer.length
+          const NUM_BARS = 200
+          const blockSize = Math.max(1, Math.floor(len / NUM_BARS))
+          const peaks = new Array(NUM_BARS).fill(0)
+          for (let ch = 0; ch < numChannels; ch++) {
+            const data = audioBuffer.getChannelData(ch)
+            for (let i = 0; i < NUM_BARS; i++) {
+              let peak = 0
+              const start = i * blockSize
+              for (let j = 0; j < blockSize; j++) {
+                const v = Math.abs(data[start + j] || 0)
+                if (v > peak) peak = v
+              }
+              peaks[i] += peak / numChannels
             }
-            peaks[i] += peak / numChannels
           }
+          const maxPeak = Math.max(...peaks, 0.001)
+          if (!cancelled) {
+            setWaveData(peaks.map(p => p / maxPeak))
+            setWaveLoading(false)
+          }
+        } finally {
+          try { ac.close() } catch (_) {}
         }
-
-        const maxPeak = Math.max(...peaks, 0.001)
-        setWaveData(peaks.map(p => p / maxPeak))
-        setWaveLoading(false)
-      })
-      .catch(() => {
-        try { ac.close() } catch (_) {}
+      } catch (_) {
         if (!cancelled) setWaveLoading(false)
-      })
+      }
+    }
 
+    run()
     return () => { cancelled = true }
   }, [audioUrl])
 
   // Draw waveform on canvas
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas || canvasSize.w === 0 || canvasSize.h === 0) return
+    if (!canvas || canvasW === 0) return
+    try {
+      const dpr = window.devicePixelRatio || 1
+      const W = canvasW
+      const H = canvas.offsetHeight || 72
+      canvas.width = W * dpr
+      canvas.height = H * dpr
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      ctx.save()
+      ctx.scale(dpr, dpr)
+      ctx.clearRect(0, 0, W, H)
 
-    const dpr = window.devicePixelRatio || 1
-    const W = canvasSize.w
-    const H = canvasSize.h
-    canvas.width = W * dpr
-    canvas.height = H * dpr
-    const ctx = canvas.getContext('2d')
-    ctx.scale(dpr, dpr)
-    ctx.clearRect(0, 0, W, H)
+      const pct = duration > 0 ? currentTime / duration : 0
+      const loopStartFrac = duration > 0 && loopStart !== null ? loopStart / duration : null
+      const loopEndFrac   = duration > 0 && loopEnd   !== null ? loopEnd   / duration : null
 
-    const pct = duration > 0 ? currentTime / duration : 0
-    const loopStartPct = duration > 0 && loopStart !== null ? loopStart / duration : null
-    const loopEndPct   = duration > 0 && loopEnd   !== null ? loopEnd   / duration : null
+      const data = waveData || Array.from({ length: 100 }, () => 0.12)
+      const NUM_BARS = data.length
+      const slotW = W / NUM_BARS
+      const barW = Math.max(1, slotW * 0.55)
+      const gapX = (slotW - barW) / 2
+      const cy = H / 2
 
-    // Placeholder while loading: flat low bars
-    const data = waveData || Array.from({ length: 100 }, () => 0.12)
-    const NUM_BARS = data.length
-    const slotW = W / NUM_BARS
-    const barW = Math.max(1, slotW * 0.55)
-    const gapX = (slotW - barW) / 2
-    const cy = H / 2
+      for (let i = 0; i < NUM_BARS; i++) {
+        const barPct = (i + 0.5) / NUM_BARS
+        const x = i * slotW + gapX
+        const amp = data[i] || 0
 
-    for (let i = 0; i < NUM_BARS; i++) {
-      const barPct = (i + 0.5) / NUM_BARS
-      const x = i * slotW + gapX
-      const amp = data[i]
+        const mainH = Math.max(1, amp * cy * 0.92)
+        const reflH = Math.max(1, amp * cy * 0.45)
 
-      // Top bar (main) and smaller mirrored reflection below
-      const mainH = Math.max(1, amp * cy * 0.92)
-      const reflH = Math.max(1, amp * cy * 0.45)
+        const isPlayed = barPct <= pct
+        const inLoop = loopStartFrac !== null && loopEndFrac !== null
+          && barPct >= loopStartFrac && barPct <= loopEndFrac
 
-      const isPlayed = barPct <= pct
-      const inLoop = loopStartPct !== null && loopEndPct !== null
-        && barPct >= loopStartPct && barPct <= loopEndPct
+        let mainColor, reflColor
+        if (isPlayed) {
+          mainColor = colors.gold
+          reflColor = colors.goldDim
+        } else if (inLoop && loopEnabled) {
+          mainColor = colors.orange
+          reflColor = colors.orangeDim
+        } else if (inLoop) {
+          mainColor = `rgba(245,130,13,0.53)`
+          reflColor = `rgba(245,130,13,0.27)`
+        } else {
+          mainColor = colors.border
+          reflColor = colors.borderLight || colors.border
+        }
 
-      let mainColor, reflColor
-      if (isPlayed) {
-        mainColor = colors.gold
-        reflColor = colors.goldDim
-      } else if (inLoop && loopEnabled) {
-        mainColor = colors.orange
-        reflColor = colors.orangeDim
-      } else if (inLoop) {
-        mainColor = colors.orange + '88'
-        reflColor = colors.orange + '44'
-      } else {
-        mainColor = colors.border
-        reflColor = colors.borderLight || colors.border
+        ctx.fillStyle = mainColor
+        ctx.fillRect(x, cy - mainH, barW, mainH)
+        ctx.globalAlpha = 0.45
+        ctx.fillStyle = reflColor
+        ctx.fillRect(x, cy, barW, reflH)
+        ctx.globalAlpha = 1
       }
 
-      // Main bar (upward from centre)
-      ctx.fillStyle = mainColor
-      ctx.fillRect(x, cy - mainH, barW, mainH)
-
-      // Reflection (downward from centre, semi-transparent)
-      ctx.globalAlpha = 0.45
-      ctx.fillStyle = reflColor
-      ctx.fillRect(x, cy, barW, reflH)
+      ctx.fillStyle = colors.border
+      ctx.globalAlpha = 0.5
+      ctx.fillRect(0, cy - 0.5, W, 1)
       ctx.globalAlpha = 1
-    }
+      ctx.restore()
+    } catch (_) {}
+  }, [waveData, currentTime, duration, loopStart, loopEnd, loopEnabled, canvasW])
 
-    // Centre divider line
-    ctx.fillStyle = colors.border
-    ctx.globalAlpha = 0.5
-    ctx.fillRect(0, cy - 0.5, W, 1)
-    ctx.globalAlpha = 1
-  }, [waveData, currentTime, duration, loopStart, loopEnd, loopEnabled, canvasSize])
-
-  function getSeekTime(e) {
+  function getSeekTime(clientX) {
     const canvas = canvasRef.current
     if (!canvas || !duration) return null
-    const rect = canvas.getBoundingClientRect()
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX
-    const x = Math.max(0, Math.min(rect.width, clientX - rect.left))
-    return (x / rect.width) * duration
+    try {
+      const rect = canvas.getBoundingClientRect()
+      if (!rect.width) return null
+      const x = Math.max(0, Math.min(rect.width, clientX - rect.left))
+      return (x / rect.width) * duration
+    } catch (_) { return null }
   }
 
-  function handleClick(e) {
-    const t = getSeekTime(e)
-    if (t !== null) onSeek(t)
-  }
-  function handleMouseMove(e) {
-    if (e.buttons !== 1) return
-    const t = getSeekTime(e)
-    if (t !== null) onSeek(t)
-  }
-  function handleTouchMove(e) {
-    e.preventDefault()
-    const t = getSeekTime(e)
+  function handlePointerSeek(e) {
+    const clientX = e.clientX ?? e.changedTouches?.[0]?.clientX
+    if (clientX == null) return
+    const t = getSeekTime(clientX)
     if (t !== null) onSeek(t)
   }
 
   return (
     <div
       style={{ position: 'relative', width: '100%', height: '72px', cursor: 'pointer', userSelect: 'none' }}
-      onClick={handleClick}
-      onMouseMove={handleMouseMove}
-      onTouchStart={handleClick}
-      onTouchMove={handleTouchMove}
+      onClick={handlePointerSeek}
+      onMouseMove={e => { if (e.buttons === 1) handlePointerSeek(e) }}
+      onTouchStart={handlePointerSeek}
+      onTouchMove={e => { e.preventDefault(); handlePointerSeek(e) }}
     >
       <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
 
-      {/* Playhead line */}
       {duration > 0 && (
         <div style={{
           position: 'absolute', top: 0,
           left: `${(currentTime / duration) * 100}%`,
           width: '2px', height: '100%',
-          background: colors.gold,
-          pointerEvents: 'none',
-          transform: 'translateX(-1px)',
-          opacity: 0.9,
+          background: colors.gold, pointerEvents: 'none',
+          transform: 'translateX(-1px)', opacity: 0.9,
         }} />
       )}
 
-      {/* Loop markers */}
       {loopStart !== null && duration > 0 && (
         <div style={{
           position: 'absolute', top: 0,
           left: `${(loopStart / duration) * 100}%`,
           width: '2px', height: '100%',
-          background: colors.orange,
-          pointerEvents: 'none',
-          zIndex: 2,
+          background: colors.orange, pointerEvents: 'none', zIndex: 2,
         }} />
       )}
       {loopEnd !== null && duration > 0 && (
@@ -209,15 +211,13 @@ function WaveformCanvas({ audioUrl, currentTime, duration, onSeek, loopStart, lo
           position: 'absolute', top: 0,
           left: `${(loopEnd / duration) * 100}%`,
           width: '2px', height: '100%',
-          background: colors.orange,
-          pointerEvents: 'none',
-          zIndex: 2,
+          background: colors.orange, pointerEvents: 'none', zIndex: 2,
         }} />
       )}
 
       {waveLoading && (
         <div style={{
-          position: 'absolute', inset: 0,
+          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: '0.67rem', color: colors.textMuted, fontFamily: fonts.mono,
           letterSpacing: '0.08em', pointerEvents: 'none',
@@ -565,18 +565,21 @@ export default function Mix() {
 
             {/* ── Waveform scrubber ── */}
             <div style={{ marginBottom: '16px' }}>
-              <WaveformCanvas
-                audioUrl={audioUrl}
-                currentTime={currentTime}
-                duration={duration}
-                onSeek={t => {
-                  if (audioRef.current) audioRef.current.currentTime = t
-                  setCurrentTime(t)
-                }}
-                loopStart={loopStart}
-                loopEnd={loopEnd}
-                loopEnabled={loopEnabled}
-              />
+              <WaveformErrorBoundary>
+                <WaveformCanvas
+                  audioUrl={audioUrl}
+                  currentTime={currentTime}
+                  duration={duration}
+                  onSeek={t => {
+                    const safe = Number.isFinite(t) ? t : 0
+                    if (audioRef.current) audioRef.current.currentTime = safe
+                    setCurrentTime(safe)
+                  }}
+                  loopStart={loopStart}
+                  loopEnd={loopEnd}
+                  loopEnabled={loopEnabled}
+                />
+              </WaveformErrorBoundary>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px' }}>
                 <span style={{ fontFamily: fonts.mono, fontSize: '0.72rem', color: colors.textMuted }}>
                   {formatTime(currentTime)}
