@@ -5,6 +5,230 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { colors, fonts, radius, shadow } from '../theme'
 import { useIsMobile } from '../hooks/useWindowWidth'
 
+// ── Waveform ──────────────────────────────────────────────────────────────────
+function WaveformCanvas({ audioUrl, currentTime, duration, onSeek, loopStart, loopEnd, loopEnabled }) {
+  const canvasRef = useRef(null)
+  const [waveData, setWaveData] = useState(null)
+  const [waveLoading, setWaveLoading] = useState(false)
+  const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 })
+
+  // ResizeObserver to track canvas element size for hi-DPI draws
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ro = new ResizeObserver(entries => {
+      const { width, height } = entries[0].contentRect
+      setCanvasSize({ w: Math.round(width), h: Math.round(height) })
+    })
+    ro.observe(canvas)
+    setCanvasSize({ w: canvas.offsetWidth, h: canvas.offsetHeight })
+    return () => ro.disconnect()
+  }, [])
+
+  // Fetch and decode audio to extract real peak amplitudes
+  useEffect(() => {
+    if (!audioUrl) return
+    let cancelled = false
+    setWaveLoading(true)
+    setWaveData(null)
+
+    const Ctx = window.AudioContext || window.webkitAudioContext
+    if (!Ctx) { setWaveLoading(false); return }
+    const ac = new Ctx()
+
+    fetch(audioUrl)
+      .then(r => r.arrayBuffer())
+      .then(buf => ac.decodeAudioData(buf))
+      .then(audioBuffer => {
+        ac.close()
+        if (cancelled) return
+        // Use the first channel; for stereo mix both channels by averaging
+        const numChannels = audioBuffer.numberOfChannels
+        const len = audioBuffer.length
+        const NUM_BARS = 200
+        const blockSize = Math.floor(len / NUM_BARS)
+        const peaks = new Array(NUM_BARS).fill(0)
+
+        for (let ch = 0; ch < numChannels; ch++) {
+          const data = audioBuffer.getChannelData(ch)
+          for (let i = 0; i < NUM_BARS; i++) {
+            let peak = 0
+            const start = i * blockSize
+            for (let j = 0; j < blockSize; j++) {
+              const v = Math.abs(data[start + j])
+              if (v > peak) peak = v
+            }
+            peaks[i] += peak / numChannels
+          }
+        }
+
+        const maxPeak = Math.max(...peaks, 0.001)
+        setWaveData(peaks.map(p => p / maxPeak))
+        setWaveLoading(false)
+      })
+      .catch(() => {
+        try { ac.close() } catch (_) {}
+        if (!cancelled) setWaveLoading(false)
+      })
+
+    return () => { cancelled = true }
+  }, [audioUrl])
+
+  // Draw waveform on canvas
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || canvasSize.w === 0 || canvasSize.h === 0) return
+
+    const dpr = window.devicePixelRatio || 1
+    const W = canvasSize.w
+    const H = canvasSize.h
+    canvas.width = W * dpr
+    canvas.height = H * dpr
+    const ctx = canvas.getContext('2d')
+    ctx.scale(dpr, dpr)
+    ctx.clearRect(0, 0, W, H)
+
+    const pct = duration > 0 ? currentTime / duration : 0
+    const loopStartPct = duration > 0 && loopStart !== null ? loopStart / duration : null
+    const loopEndPct   = duration > 0 && loopEnd   !== null ? loopEnd   / duration : null
+
+    // Placeholder while loading: flat low bars
+    const data = waveData || Array.from({ length: 100 }, () => 0.12)
+    const NUM_BARS = data.length
+    const slotW = W / NUM_BARS
+    const barW = Math.max(1, slotW * 0.55)
+    const gapX = (slotW - barW) / 2
+    const cy = H / 2
+
+    for (let i = 0; i < NUM_BARS; i++) {
+      const barPct = (i + 0.5) / NUM_BARS
+      const x = i * slotW + gapX
+      const amp = data[i]
+
+      // Top bar (main) and smaller mirrored reflection below
+      const mainH = Math.max(1, amp * cy * 0.92)
+      const reflH = Math.max(1, amp * cy * 0.45)
+
+      const isPlayed = barPct <= pct
+      const inLoop = loopStartPct !== null && loopEndPct !== null
+        && barPct >= loopStartPct && barPct <= loopEndPct
+
+      let mainColor, reflColor
+      if (isPlayed) {
+        mainColor = colors.gold
+        reflColor = colors.goldDim
+      } else if (inLoop && loopEnabled) {
+        mainColor = colors.orange
+        reflColor = colors.orangeDim
+      } else if (inLoop) {
+        mainColor = colors.orange + '88'
+        reflColor = colors.orange + '44'
+      } else {
+        mainColor = colors.border
+        reflColor = colors.borderLight || colors.border
+      }
+
+      // Main bar (upward from centre)
+      ctx.fillStyle = mainColor
+      ctx.fillRect(x, cy - mainH, barW, mainH)
+
+      // Reflection (downward from centre, semi-transparent)
+      ctx.globalAlpha = 0.45
+      ctx.fillStyle = reflColor
+      ctx.fillRect(x, cy, barW, reflH)
+      ctx.globalAlpha = 1
+    }
+
+    // Centre divider line
+    ctx.fillStyle = colors.border
+    ctx.globalAlpha = 0.5
+    ctx.fillRect(0, cy - 0.5, W, 1)
+    ctx.globalAlpha = 1
+  }, [waveData, currentTime, duration, loopStart, loopEnd, loopEnabled, canvasSize])
+
+  function getSeekTime(e) {
+    const canvas = canvasRef.current
+    if (!canvas || !duration) return null
+    const rect = canvas.getBoundingClientRect()
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left))
+    return (x / rect.width) * duration
+  }
+
+  function handleClick(e) {
+    const t = getSeekTime(e)
+    if (t !== null) onSeek(t)
+  }
+  function handleMouseMove(e) {
+    if (e.buttons !== 1) return
+    const t = getSeekTime(e)
+    if (t !== null) onSeek(t)
+  }
+  function handleTouchMove(e) {
+    e.preventDefault()
+    const t = getSeekTime(e)
+    if (t !== null) onSeek(t)
+  }
+
+  return (
+    <div
+      style={{ position: 'relative', width: '100%', height: '72px', cursor: 'pointer', userSelect: 'none' }}
+      onClick={handleClick}
+      onMouseMove={handleMouseMove}
+      onTouchStart={handleClick}
+      onTouchMove={handleTouchMove}
+    >
+      <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
+
+      {/* Playhead line */}
+      {duration > 0 && (
+        <div style={{
+          position: 'absolute', top: 0,
+          left: `${(currentTime / duration) * 100}%`,
+          width: '2px', height: '100%',
+          background: colors.gold,
+          pointerEvents: 'none',
+          transform: 'translateX(-1px)',
+          opacity: 0.9,
+        }} />
+      )}
+
+      {/* Loop markers */}
+      {loopStartPct !== null && duration > 0 && (
+        <div style={{
+          position: 'absolute', top: 0,
+          left: `${(loopStart / duration) * 100}%`,
+          width: '2px', height: '100%',
+          background: colors.orange,
+          pointerEvents: 'none',
+          zIndex: 2,
+        }} />
+      )}
+      {loopEnd !== null && duration > 0 && (
+        <div style={{
+          position: 'absolute', top: 0,
+          left: `${(loopEnd / duration) * 100}%`,
+          width: '2px', height: '100%',
+          background: colors.orange,
+          pointerEvents: 'none',
+          zIndex: 2,
+        }} />
+      )}
+
+      {waveLoading && (
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: '0.67rem', color: colors.textMuted, fontFamily: fonts.mono,
+          letterSpacing: '0.08em', pointerEvents: 'none',
+        }}>
+          analyzing audio…
+        </div>
+      )}
+    </div>
+  )
+}
+
 function formatTime(s) {
   if (!s || isNaN(s)) return '0:00'
   const m = Math.floor(s / 60)
@@ -32,7 +256,6 @@ export default function Mix() {
   const [playing, setPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
-  const [seeking, setSeeking] = useState(false)
   const [speed, setSpeed] = useState(1)
 
   // Loop state
@@ -72,13 +295,11 @@ export default function Mix() {
     const el = audioRef.current
     if (!el) return
     const onTime = () => {
-      if (!seeking) {
-        const t = el.currentTime
-        setCurrentTime(t)
-        const { start, end, enabled } = loopRef.current
-        if (enabled && start !== null && end !== null && end > start && t >= end) {
-          el.currentTime = start
-        }
+      const t = el.currentTime
+      setCurrentTime(t)
+      const { start, end, enabled } = loopRef.current
+      if (enabled && start !== null && end !== null && end > start && t >= end) {
+        el.currentTime = start
       }
     }
     const onMeta = () => setDuration(el.duration)
@@ -102,7 +323,7 @@ export default function Mix() {
       el.removeEventListener('ended', onEnd)
       el.removeEventListener('error', onErr)
     }
-  }, [audioUrl, seeking])
+  }, [audioUrl])
 
   // Sync playback speed
   useEffect(() => {
@@ -136,18 +357,6 @@ export default function Mix() {
     const el = audioRef.current
     if (!el) return
     el.currentTime = Math.max(0, Math.min(duration, el.currentTime + secs))
-  }
-
-  function handleScrubStart(e) {
-    setSeeking(true)
-    setCurrentTime(parseFloat(e.target.value))
-  }
-  function handleScrubMove(e) { setCurrentTime(parseFloat(e.target.value)) }
-  function handleScrubEnd(e) {
-    const t = parseFloat(e.target.value)
-    if (audioRef.current) audioRef.current.currentTime = t
-    setCurrentTime(t)
-    setSeeking(false)
   }
 
   // ── Loop helpers ──────────────────────────────────────────────────────────
@@ -223,30 +432,10 @@ export default function Mix() {
   }
 
   // ── Derived values ────────────────────────────────────────────────────────
-  const pct = duration > 0 ? (currentTime / duration) * 100 : 0
-  const loopStartPct = duration > 0 && loopStart !== null ? (loopStart / duration) * 100 : null
-  const loopEndPct   = duration > 0 && loopEnd   !== null ? (loopEnd   / duration) * 100 : null
   const hasLoop = loopStart !== null && loopEnd !== null && loopEnd > loopStart
 
   // ── Styles ────────────────────────────────────────────────────────────────
   const css = `
-    .mix-scrubber {
-      -webkit-appearance: none; appearance: none;
-      width: 100%; height: 5px; border-radius: 3px;
-      background: linear-gradient(to right, ${colors.gold} ${pct}%, ${colors.border} ${pct}%);
-      outline: none; cursor: pointer; position: relative; z-index: 2;
-    }
-    .mix-scrubber::-webkit-slider-thumb {
-      -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
-      background: ${colors.gold}; cursor: pointer;
-      box-shadow: 0 0 0 2px white, 0 0 0 3px ${colors.gold}60;
-      transition: transform 0.1s;
-    }
-    .mix-scrubber::-webkit-slider-thumb:hover { transform: scale(1.2); }
-    .mix-scrubber::-moz-range-thumb {
-      width: 16px; height: 16px; border-radius: 50%;
-      background: ${colors.gold}; cursor: pointer; border: none;
-    }
     .speed-chip {
       background: none;
       border: 1.5px solid ${colors.border};
@@ -374,68 +563,21 @@ export default function Mix() {
           {/* Controls */}
           <div style={{ padding: '20px 24px 24px' }}>
 
-            {/* ── Scrubber + loop region overlay ── */}
+            {/* ── Waveform scrubber ── */}
             <div style={{ marginBottom: '16px' }}>
-              <div style={{ position: 'relative', height: '5px', marginBottom: '8px' }}>
-                {/* Loop region highlight */}
-                {hasLoop && (
-                  <div style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: `${loopStartPct}%`,
-                    width: `${loopEndPct - loopStartPct}%`,
-                    height: '100%',
-                    background: loopEnabled
-                      ? `${colors.orange}55`
-                      : `${colors.border}`,
-                    borderRadius: '3px',
-                    pointerEvents: 'none',
-                    zIndex: 1,
-                  }} />
-                )}
-                {/* Loop start marker */}
-                {loopStartPct !== null && (
-                  <div style={{
-                    position: 'absolute',
-                    left: `${loopStartPct}%`,
-                    top: '-4px',
-                    width: '2px',
-                    height: '13px',
-                    background: colors.orange,
-                    borderRadius: '1px',
-                    zIndex: 3,
-                    pointerEvents: 'none',
-                  }} />
-                )}
-                {/* Loop end marker */}
-                {loopEndPct !== null && (
-                  <div style={{
-                    position: 'absolute',
-                    left: `${loopEndPct}%`,
-                    top: '-4px',
-                    width: '2px',
-                    height: '13px',
-                    background: colors.orange,
-                    borderRadius: '1px',
-                    zIndex: 3,
-                    pointerEvents: 'none',
-                  }} />
-                )}
-                <input
-                  type="range"
-                  className="mix-scrubber"
-                  style={{ position: 'absolute', top: 0, left: 0, margin: 0 }}
-                  min={0}
-                  max={duration || 100}
-                  value={currentTime}
-                  onMouseDown={handleScrubStart}
-                  onTouchStart={handleScrubStart}
-                  onChange={handleScrubMove}
-                  onMouseUp={handleScrubEnd}
-                  onTouchEnd={handleScrubEnd}
-                />
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <WaveformCanvas
+                audioUrl={audioUrl}
+                currentTime={currentTime}
+                duration={duration}
+                onSeek={t => {
+                  if (audioRef.current) audioRef.current.currentTime = t
+                  setCurrentTime(t)
+                }}
+                loopStart={loopStart}
+                loopEnd={loopEnd}
+                loopEnabled={loopEnabled}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px' }}>
                 <span style={{ fontFamily: fonts.mono, fontSize: '0.72rem', color: colors.textMuted }}>
                   {formatTime(currentTime)}
                 </span>
