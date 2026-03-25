@@ -5,7 +5,7 @@
 export function getYouTubeEmbedUrl(url) {
   if (!url) return null
   const match = url.match(
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&?\s]+)/
+    /(?:(?:youtube(?:-nocookie)?\.com)\/(?:watch\?v=|embed\/|shorts\/|v\/)|youtu\.be\/)([^&?\s]+)/
   )
   if (match && match[1]) {
     return `https://www.youtube.com/embed/${match[1]}`
