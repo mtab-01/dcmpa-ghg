@@ -36,6 +36,7 @@ export default function VideoCard({ video, onDelete }) {
         <div style={{ position: 'relative', paddingTop: '56.25%', background: '#000' }}>
           <iframe
             src={embedUrl}
+            title={video.title}
             style={{
               position: 'absolute', top: 0, left: 0,
               width: '100%', height: '100%',
