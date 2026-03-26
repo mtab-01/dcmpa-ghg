@@ -35,11 +35,16 @@ export default function Mix() {
   const [seeking, setSeeking] = useState(false)
   const [speed, setSpeed] = useState(1)
 
-  // Loop state
-  const [loopStart, setLoopStart] = useState(null)   // seconds or null
-  const [loopEnd, setLoopEnd] = useState(null)       // seconds or null
+  // Active loop state
+  const [loopStart, setLoopStart] = useState(null)
+  const [loopEnd, setLoopEnd] = useState(null)
   const [loopEnabled, setLoopEnabled] = useState(false)
   const loopRef = useRef({ start: null, end: null, enabled: false })
+
+  // Saved loops
+  const [savedLoops, setSavedLoops] = useState([])
+  const [saveName, setSaveName] = useState('')
+  const [showSaveInput, setShowSaveInput] = useState(false)
 
   // Upload state
   const [showUpload, setShowUpload] = useState(false)
@@ -55,7 +60,7 @@ export default function Mix() {
 
   useEffect(() => { loadMix() }, [])
 
-  // Load loop from Firestore and subscribe to changes
+  // Subscribe to active loop changes
   useEffect(() => {
     const unsub = onSnapshot(doc(db, 'mix_loops', 'current'), snap => {
       if (!snap.exists()) return
@@ -63,6 +68,15 @@ export default function Mix() {
       setLoopStart(d.loopStart ?? null)
       setLoopEnd(d.loopEnd ?? null)
       setLoopEnabled(d.loopEnabled ?? false)
+    })
+    return unsub
+  }, [])
+
+  // Subscribe to saved loops
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'mix_loops', 'saved'), snap => {
+      if (!snap.exists()) { setSavedLoops([]); return }
+      setSavedLoops(snap.data().loops ?? [])
     })
     return unsub
   }, [])
@@ -150,8 +164,8 @@ export default function Mix() {
     setSeeking(false)
   }
 
-  // ── Loop helpers ──────────────────────────────────────────────────────────
-  const saveLoop = useCallback(async (patch) => {
+  // ── Active loop helpers ────────────────────────────────────────────────────
+  const saveActiveLoop = useCallback(async (patch) => {
     try {
       await setDoc(doc(db, 'mix_loops', 'current'), patch, { merge: true })
     } catch { /* non-critical */ }
@@ -160,35 +174,61 @@ export default function Mix() {
   function setLoopA() {
     const t = audioRef.current?.currentTime ?? currentTime
     setLoopStart(t)
-    // If B exists and is before new A, clear B
     const newEnd = loopEnd !== null && loopEnd > t ? loopEnd : null
     setLoopEnd(newEnd)
-    saveLoop({ loopStart: t, loopEnd: newEnd })
+    saveActiveLoop({ loopStart: t, loopEnd: newEnd })
   }
 
   function setLoopB() {
     const t = audioRef.current?.currentTime ?? currentTime
-    // B must be after A
     if (loopStart !== null && t <= loopStart) return
     setLoopEnd(t)
-    saveLoop({ loopEnd: t })
+    saveActiveLoop({ loopEnd: t })
   }
 
   function clearLoop() {
     setLoopStart(null)
     setLoopEnd(null)
     setLoopEnabled(false)
-    saveLoop({ loopStart: null, loopEnd: null, loopEnabled: false })
+    saveActiveLoop({ loopStart: null, loopEnd: null, loopEnabled: false })
   }
 
   async function toggleLoop() {
     const next = !loopEnabled
     setLoopEnabled(next)
-    await saveLoop({ loopEnabled: next })
-    // If enabling and we have a region, jump to start
+    await saveActiveLoop({ loopEnabled: next })
     if (next && loopStart !== null && audioRef.current) {
       audioRef.current.currentTime = loopStart
     }
+  }
+
+  // Load a saved loop into the active slot
+  async function loadSavedLoop(loop) {
+    setLoopStart(loop.start)
+    setLoopEnd(loop.end)
+    setLoopEnabled(true)
+    if (audioRef.current) audioRef.current.currentTime = loop.start
+    await saveActiveLoop({ loopStart: loop.start, loopEnd: loop.end, loopEnabled: true })
+  }
+
+  // Save current A/B loop with a name
+  async function handleSaveLoop() {
+    const name = saveName.trim() || `Loop ${savedLoops.length + 1}`
+    if (loopStart === null || loopEnd === null || loopEnd <= loopStart) return
+    const newLoop = { id: Date.now().toString(), name, start: loopStart, end: loopEnd }
+    const updated = [...savedLoops, newLoop]
+    try {
+      await setDoc(doc(db, 'mix_loops', 'saved'), { loops: updated })
+    } catch { /* non-critical */ }
+    setSaveName('')
+    setShowSaveInput(false)
+  }
+
+  async function deleteSavedLoop(id) {
+    const updated = savedLoops.filter(l => l.id !== id)
+    try {
+      await setDoc(doc(db, 'mix_loops', 'saved'), { loops: updated })
+    } catch { /* non-critical */ }
   }
 
   async function handleFilePicked(e) {
@@ -222,13 +262,13 @@ export default function Mix() {
     }
   }
 
-  // ── Derived values ────────────────────────────────────────────────────────
+  // ── Derived values ─────────────────────────────────────────────────────────
   const pct = duration > 0 ? (currentTime / duration) * 100 : 0
   const loopStartPct = duration > 0 && loopStart !== null ? (loopStart / duration) * 100 : null
   const loopEndPct   = duration > 0 && loopEnd   !== null ? (loopEnd   / duration) * 100 : null
   const hasLoop = loopStart !== null && loopEnd !== null && loopEnd > loopStart
 
-  // ── Styles ────────────────────────────────────────────────────────────────
+  // ── Styles ─────────────────────────────────────────────────────────────────
   const css = `
     .mix-scrubber {
       -webkit-appearance: none; appearance: none;
@@ -284,6 +324,28 @@ export default function Mix() {
       color: ${colors.gold} !important;
       font-weight: 700 !important;
     }
+    .saved-loop-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px 5px 12px;
+      border-radius: 20px;
+      border: 1.5px solid ${colors.border};
+      background: none;
+      font-family: ${fonts.mono};
+      font-size: 0.72rem;
+      color: ${colors.creamDim};
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .saved-loop-chip:hover { border-color: ${colors.gold}; color: ${colors.gold}; }
+    .saved-loop-chip-del {
+      background: none; border: none; padding: 0 2px;
+      color: ${colors.textMuted}; cursor: pointer; font-size: 0.7rem;
+      line-height: 1;
+    }
+    .saved-loop-chip-del:hover { color: ${colors.red}; }
   `
 
   return (
@@ -377,48 +439,28 @@ export default function Mix() {
             {/* ── Scrubber + loop region overlay ── */}
             <div style={{ marginBottom: '16px' }}>
               <div style={{ position: 'relative', height: '5px', marginBottom: '8px' }}>
-                {/* Loop region highlight */}
                 {hasLoop && (
                   <div style={{
-                    position: 'absolute',
-                    top: 0,
+                    position: 'absolute', top: 0,
                     left: `${loopStartPct}%`,
                     width: `${loopEndPct - loopStartPct}%`,
                     height: '100%',
-                    background: loopEnabled
-                      ? `${colors.orange}55`
-                      : `${colors.border}`,
-                    borderRadius: '3px',
-                    pointerEvents: 'none',
-                    zIndex: 1,
+                    background: loopEnabled ? `${colors.orange}55` : `${colors.border}`,
+                    borderRadius: '3px', pointerEvents: 'none', zIndex: 1,
                   }} />
                 )}
-                {/* Loop start marker */}
                 {loopStartPct !== null && (
                   <div style={{
-                    position: 'absolute',
-                    left: `${loopStartPct}%`,
-                    top: '-4px',
-                    width: '2px',
-                    height: '13px',
-                    background: colors.orange,
-                    borderRadius: '1px',
-                    zIndex: 3,
-                    pointerEvents: 'none',
+                    position: 'absolute', left: `${loopStartPct}%`, top: '-4px',
+                    width: '2px', height: '13px', background: colors.orange,
+                    borderRadius: '1px', zIndex: 3, pointerEvents: 'none',
                   }} />
                 )}
-                {/* Loop end marker */}
                 {loopEndPct !== null && (
                   <div style={{
-                    position: 'absolute',
-                    left: `${loopEndPct}%`,
-                    top: '-4px',
-                    width: '2px',
-                    height: '13px',
-                    background: colors.orange,
-                    borderRadius: '1px',
-                    zIndex: 3,
-                    pointerEvents: 'none',
+                    position: 'absolute', left: `${loopEndPct}%`, top: '-4px',
+                    width: '2px', height: '13px', background: colors.orange,
+                    borderRadius: '1px', zIndex: 3, pointerEvents: 'none',
                   }} />
                 )}
                 <input
@@ -497,14 +539,8 @@ export default function Mix() {
             )}
 
             {/* ── Speed control ── */}
-            <div style={{
-              borderTop: `1px solid ${colors.border}`,
-              paddingTop: '16px',
-              marginBottom: '16px',
-            }}>
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
-              }}>
+            <div style={{ borderTop: `1px solid ${colors.border}`, paddingTop: '16px', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <span style={{ fontFamily: fonts.mono, fontSize: '0.68rem', color: colors.textMuted, marginRight: '2px' }}>
                   SPEED
                 </span>
@@ -521,24 +557,16 @@ export default function Mix() {
             </div>
 
             {/* ── Loop section ── */}
-            <div style={{
-              borderTop: `1px solid ${colors.border}`,
-              paddingTop: '16px',
-            }}>
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: '8px',
-                flexWrap: 'wrap',
-              }}>
+            <div style={{ borderTop: `1px solid ${colors.border}`, paddingTop: '16px' }}>
+
+              {/* A/B controls */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <span style={{ fontFamily: fonts.mono, fontSize: '0.68rem', color: colors.textMuted, marginRight: '2px' }}>
                   LOOP
                 </span>
-
-                {/* Set A */}
                 <button className="loop-btn" onClick={setLoopA} title="Set loop start to current position">
                   [A] {loopStart !== null ? formatTime(loopStart) : '—'}
                 </button>
-
-                {/* Set B */}
                 <button
                   className="loop-btn"
                   onClick={setLoopB}
@@ -547,8 +575,6 @@ export default function Mix() {
                 >
                   [B] {loopEnd !== null ? formatTime(loopEnd) : '—'}
                 </button>
-
-                {/* Toggle loop */}
                 <button
                   className={`loop-btn${loopEnabled ? ' loop-toggle-on' : ''}`}
                   onClick={toggleLoop}
@@ -557,8 +583,6 @@ export default function Mix() {
                 >
                   {loopEnabled ? '⟳ On' : '⟳ Off'}
                 </button>
-
-                {/* Clear */}
                 {(loopStart !== null || loopEnd !== null) && (
                   <button
                     className="loop-btn"
@@ -573,19 +597,86 @@ export default function Mix() {
 
               {hasLoop && (
                 <p style={{
-                  fontFamily: fonts.mono, fontSize: '0.68rem', color: colors.textMuted,
-                  marginTop: '8px',
+                  fontFamily: fonts.mono, fontSize: '0.68rem', color: colors.textMuted, marginTop: '8px',
                 }}>
                   {formatTime(loopStart)} → {formatTime(loopEnd)}
                   {' '}·{' '}
                   {formatTime(loopEnd - loopStart)} region
-                  {loopEnabled && (
-                    <span style={{ color: colors.orange, marginLeft: '8px' }}>● looping</span>
-                  )}
+                  {loopEnabled && <span style={{ color: colors.orange, marginLeft: '8px' }}>● looping</span>}
                 </p>
               )}
 
-              <p style={{ fontSize: '0.68rem', color: `${colors.textMuted}99`, marginTop: '6px' }}>
+              {/* Save current loop */}
+              {hasLoop && (
+                <div style={{ marginTop: '10px' }}>
+                  {!showSaveInput ? (
+                    <button
+                      className="loop-btn"
+                      onClick={() => setShowSaveInput(true)}
+                      style={{ fontSize: '0.72rem' }}
+                    >
+                      + Save Loop
+                    </button>
+                  ) : (
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <input
+                        autoFocus
+                        value={saveName}
+                        onChange={e => setSaveName(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') handleSaveLoop(); if (e.key === 'Escape') { setShowSaveInput(false); setSaveName('') } }}
+                        placeholder={`Loop ${savedLoops.length + 1}`}
+                        style={{
+                          background: colors.bg, border: `1px solid ${colors.border}`,
+                          borderRadius: radius.md, padding: '5px 10px',
+                          color: colors.cream, fontFamily: fonts.mono, fontSize: '0.78rem',
+                          outline: 'none', width: '140px',
+                        }}
+                      />
+                      <button className="loop-btn" onClick={handleSaveLoop} style={{ padding: '5px 12px', fontSize: '0.72rem' }}>
+                        Save
+                      </button>
+                      <button
+                        className="loop-btn"
+                        onClick={() => { setShowSaveInput(false); setSaveName('') }}
+                        style={{ padding: '5px 10px', fontSize: '0.72rem', color: colors.textMuted }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Saved loops list */}
+              {savedLoops.length > 0 && (
+                <div style={{ marginTop: '14px' }}>
+                  <p style={{
+                    fontFamily: fonts.mono, fontSize: '0.65rem', color: colors.textMuted,
+                    letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '8px',
+                  }}>
+                    Saved Loops
+                  </p>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {savedLoops.map(loop => (
+                      <div key={loop.id} className="saved-loop-chip" onClick={() => loadSavedLoop(loop)}>
+                        <span>{loop.name}</span>
+                        <span style={{ opacity: 0.55, fontSize: '0.65rem' }}>
+                          {formatTime(loop.start)}–{formatTime(loop.end)}
+                        </span>
+                        <button
+                          className="saved-loop-chip-del"
+                          onClick={e => { e.stopPropagation(); deleteSavedLoop(loop.id) }}
+                          title="Delete saved loop"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <p style={{ fontSize: '0.68rem', color: `${colors.textMuted}99`, marginTop: '10px' }}>
                 Loop markers sync live for all team members.
               </p>
             </div>
