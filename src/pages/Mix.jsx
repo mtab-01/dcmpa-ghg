@@ -48,6 +48,17 @@ export default function Mix() {
   const [uploadError, setUploadError] = useState(null)
   const fileInputRef = useRef(null)
 
+  // Waveform
+  const canvasRef = useRef(null)
+  const canvasContainerRef = useRef(null)
+  const rafRef = useRef(null)
+  const canvasSeekingRef = useRef(false)
+  const pendingSeekTimeRef = useRef(null)
+  const waveformPeaksRef = useRef(null)
+  const durationRef = useRef(0)
+  const [waveformPeaks, setWaveformPeaks] = useState(null)
+  const [waveformLoading, setWaveformLoading] = useState(false)
+
   // Keep loopRef in sync so the timeupdate closure can read it without stale state
   useEffect(() => {
     loopRef.current = { start: loopStart, end: loopEnd, enabled: loopEnabled }
@@ -108,6 +119,165 @@ export default function Mix() {
   useEffect(() => {
     if (audioRef.current) audioRef.current.playbackRate = speed
   }, [speed])
+
+  // Sync durationRef so drawCanvas can read it without stale closures
+  useEffect(() => { durationRef.current = duration }, [duration])
+
+  // Decode audio and compute waveform peaks
+  useEffect(() => {
+    if (!audioUrl) return
+    let cancelled = false
+    setWaveformPeaks(null)
+    waveformPeaksRef.current = null
+    setWaveformLoading(true)
+    let actx = null
+
+    fetch(audioUrl)
+      .then(r => r.arrayBuffer())
+      .then(buf => {
+        if (cancelled) return null
+        actx = new (window.AudioContext || window.webkitAudioContext)()
+        return actx.decodeAudioData(buf)
+      })
+      .then(decoded => {
+        if (!decoded || cancelled) return
+        const NUM = 200
+        const ch = decoded.getChannelData(0)
+        const block = Math.floor(ch.length / NUM)
+        const peaks = new Float32Array(NUM)
+        for (let i = 0; i < NUM; i++) {
+          let max = 0
+          for (let j = 0; j < block; j++) {
+            const v = Math.abs(ch[i * block + j])
+            if (v > max) max = v
+          }
+          peaks[i] = max
+        }
+        let gMax = 0
+        for (let i = 0; i < NUM; i++) if (peaks[i] > gMax) gMax = peaks[i]
+        if (gMax > 0) for (let i = 0; i < NUM; i++) peaks[i] /= gMax
+        if (!cancelled) {
+          waveformPeaksRef.current = peaks
+          setWaveformPeaks(peaks)
+          setWaveformLoading(false)
+        }
+      })
+      .catch(() => { if (!cancelled) setWaveformLoading(false) })
+      .finally(() => { actx?.close() })
+
+    return () => { cancelled = true }
+  }, [audioUrl])
+
+  // Draw the waveform canvas — reads exclusively from refs so any render's
+  // version of this function will produce a correct result.
+  function drawCanvas() {
+    const canvas = canvasRef.current
+    const container = canvasContainerRef.current
+    const peaks = waveformPeaksRef.current
+    if (!canvas || !container || !peaks) return
+    const W = container.clientWidth
+    if (!W) return
+    if (canvas.width !== W) canvas.width = W
+    if (canvas.height !== 72) canvas.height = 72
+    const H = 72
+    const ctx = canvas.getContext('2d')
+    ctx.clearRect(0, 0, W, H)
+
+    const dur = durationRef.current
+    const t = pendingSeekTimeRef.current !== null
+      ? pendingSeekTimeRef.current
+      : (audioRef.current?.currentTime ?? 0)
+    const playedFrac = dur > 0 ? t / dur : 0
+    const { start: ls, end: le, enabled: lEnabled } = loopRef.current
+    const lsFrac = dur > 0 && ls !== null ? ls / dur : null
+    const leFrac = dur > 0 && le !== null ? le / dur : null
+
+    const NUM = peaks.length
+    const bw = W / NUM
+    const gap = bw > 3 ? 1 : 0
+    const cy = H / 2
+
+    for (let i = 0; i < NUM; i++) {
+      const frac = i / NUM
+      const x = i * bw
+      const bh = Math.max(2, peaks[i] * H * 0.88)
+      const inLoop = lsFrac !== null && leFrac !== null && frac >= lsFrac && frac <= leFrac
+      const played = frac <= playedFrac
+
+      let color
+      if (inLoop && lEnabled) {
+        color = played ? colors.orange : `${colors.orange}55`
+      } else if (inLoop) {
+        color = played ? colors.gold : `${colors.border}cc`
+      } else {
+        color = played ? colors.gold : colors.border
+      }
+
+      ctx.fillStyle = color
+      ctx.fillRect(x + gap / 2, cy - bh / 2, Math.max(bw - gap, 1), bh)
+    }
+  }
+
+  // Redraw when peaks, loop region, or duration changes
+  useEffect(() => { drawCanvas() }, [waveformPeaks, loopStart, loopEnd, loopEnabled, duration])
+
+  // ResizeObserver so the canvas stays sharp when the container resizes
+  useEffect(() => {
+    const container = canvasContainerRef.current
+    if (!container) return
+    const ro = new ResizeObserver(() => drawCanvas())
+    ro.observe(container)
+    return () => ro.disconnect()
+  }, [])
+
+  // RAF-driven waveform animation while audio is playing
+  useEffect(() => {
+    if (!playing) {
+      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
+      return
+    }
+    const tick = () => {
+      if (audioRef.current && !canvasSeekingRef.current) {
+        setCurrentTime(audioRef.current.currentTime)
+        drawCanvas()
+      }
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+    return () => { if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null } }
+  }, [playing])
+
+  // Canvas seek helpers
+  function getCanvasTime(e) {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width))
+    return (x / rect.width) * durationRef.current
+  }
+  function handleCanvasPointerDown(e) {
+    e.currentTarget.setPointerCapture(e.pointerId)
+    canvasSeekingRef.current = true
+    setSeeking(true)
+    const t = getCanvasTime(e)
+    pendingSeekTimeRef.current = t
+    setCurrentTime(t)
+    drawCanvas()
+  }
+  function handleCanvasPointerMove(e) {
+    if (!canvasSeekingRef.current) return
+    const t = getCanvasTime(e)
+    pendingSeekTimeRef.current = t
+    setCurrentTime(t)
+    drawCanvas()
+  }
+  function handleCanvasPointerUp(e) {
+    if (!canvasSeekingRef.current) return
+    const t = getCanvasTime(e)
+    if (audioRef.current) audioRef.current.currentTime = t
+    pendingSeekTimeRef.current = null
+    canvasSeekingRef.current = false
+    setCurrentTime(t)
+    setSeeking(false)
+  }
 
   async function loadMix() {
     setAudioError(false)
@@ -374,66 +544,46 @@ export default function Mix() {
           {/* Controls */}
           <div style={{ padding: '20px 24px 24px' }}>
 
-            {/* ── Scrubber + loop region overlay ── */}
+            {/* ── Waveform ── */}
             <div style={{ marginBottom: '16px' }}>
-              <div style={{ position: 'relative', height: '5px', marginBottom: '8px' }}>
-                {/* Loop region highlight */}
-                {hasLoop && (
+              <div ref={canvasContainerRef} style={{ marginBottom: '6px' }}>
+                {/* Loading placeholder */}
+                {waveformLoading && (
                   <div style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: `${loopStartPct}%`,
-                    width: `${loopEndPct - loopStartPct}%`,
-                    height: '100%',
-                    background: loopEnabled
-                      ? `${colors.orange}55`
-                      : `${colors.border}`,
-                    borderRadius: '3px',
-                    pointerEvents: 'none',
-                    zIndex: 1,
-                  }} />
+                    height: '72px', display: 'flex', alignItems: 'center',
+                    justifyContent: 'center', gap: '2px',
+                  }}>
+                    {Array.from({ length: 40 }).map((_, i) => (
+                      <div key={i} style={{
+                        width: '3px', borderRadius: '2px',
+                        height: `${6 + Math.abs(Math.sin(i * 0.45 + 0.5)) * 36}px`,
+                        background: colors.border, opacity: 0.5,
+                      }} />
+                    ))}
+                  </div>
                 )}
-                {/* Loop start marker */}
-                {loopStartPct !== null && (
-                  <div style={{
-                    position: 'absolute',
-                    left: `${loopStartPct}%`,
-                    top: '-4px',
-                    width: '2px',
-                    height: '13px',
-                    background: colors.orange,
-                    borderRadius: '1px',
-                    zIndex: 3,
-                    pointerEvents: 'none',
-                  }} />
+                {/* Fallback plain scrubber if decode failed */}
+                {!waveformPeaks && !waveformLoading && (
+                  <div style={{ height: '72px', display: 'flex', alignItems: 'center' }}>
+                    <input
+                      type="range" className="mix-scrubber"
+                      min={0} max={duration || 100} value={currentTime}
+                      onMouseDown={handleScrubStart} onTouchStart={handleScrubStart}
+                      onChange={handleScrubMove} onMouseUp={handleScrubEnd} onTouchEnd={handleScrubEnd}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
                 )}
-                {/* Loop end marker */}
-                {loopEndPct !== null && (
-                  <div style={{
-                    position: 'absolute',
-                    left: `${loopEndPct}%`,
-                    top: '-4px',
-                    width: '2px',
-                    height: '13px',
-                    background: colors.orange,
-                    borderRadius: '1px',
-                    zIndex: 3,
-                    pointerEvents: 'none',
-                  }} />
+                {/* Waveform canvas */}
+                {waveformPeaks && (
+                  <canvas
+                    ref={canvasRef}
+                    style={{ display: 'block', width: '100%', height: '72px', cursor: 'pointer', borderRadius: '6px' }}
+                    onPointerDown={handleCanvasPointerDown}
+                    onPointerMove={handleCanvasPointerMove}
+                    onPointerUp={handleCanvasPointerUp}
+                  />
                 )}
-                <input
-                  type="range"
-                  className="mix-scrubber"
-                  style={{ position: 'absolute', top: 0, left: 0, margin: 0 }}
-                  min={0}
-                  max={duration || 100}
-                  value={currentTime}
-                  onMouseDown={handleScrubStart}
-                  onTouchStart={handleScrubStart}
-                  onChange={handleScrubMove}
-                  onMouseUp={handleScrubEnd}
-                  onTouchEnd={handleScrubEnd}
-                />
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ fontFamily: fonts.mono, fontSize: '0.72rem', color: colors.textMuted }}>
