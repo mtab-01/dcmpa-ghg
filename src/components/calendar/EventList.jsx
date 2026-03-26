@@ -3,22 +3,9 @@ import { db } from '../../firebase'
 import { collection, getDocs, doc, setDoc, deleteDoc, query, where } from 'firebase/firestore'
 import { colors, fonts, radius, shadow } from '../../theme'
 import { buildGCalUrl } from '../../utils/calendarUrl'
-import { DEFAULT_MEMBERS } from '../../constants'
+import { useMembers } from '../../hooks/useMembers'
 import Button from '../ui/Button'
 import AddEventModal from './AddEventModal'
-
-const MEMBERS_KEY = 'bhangra_members'
-
-function loadMembers() {
-  try {
-    const stored = localStorage.getItem(MEMBERS_KEY)
-    if (stored) {
-      const parsed = JSON.parse(stored)
-      if (Array.isArray(parsed) && parsed.length === 12) return parsed
-    }
-  } catch {}
-  return DEFAULT_MEMBERS
-}
 
 function formatTime(timeStr) {
   if (!timeStr) return ''
@@ -79,7 +66,7 @@ export default function EventList({ events, selectedDate, onAddEvent, onEdited }
 
 function EventCard({ event, onEdited }) {
   const gcalUrl = buildGCalUrl({ title: event.title, date: event.date, startTime: event.time, endTime: event.end_time, location: event.location, notes: event.notes })
-  const members = loadMembers()
+  const { members } = useMembers()
   const [attendance, setAttendance] = useState({})
   const [showAttendance, setShowAttendance] = useState(false)
   const [loadingAttendance, setLoadingAttendance] = useState(false)

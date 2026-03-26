@@ -174,7 +174,7 @@ export default function AddExpenseModal({ onClose, onAdded, members }) {
               maxHeight: '240px',
               overflowY: 'auto',
               padding: '8px',
-              background: '#0d0d1a',
+              background: colors.bg,
               borderRadius: '6px',
               border: `1px solid ${splitValid ? colors.border : colors.red}`,
             }}>
@@ -191,7 +191,7 @@ export default function AddExpenseModal({ onClose, onAdded, members }) {
                     onChange={e => setCustomSplits(prev => ({ ...prev, [member]: e.target.value }))}
                     style={{
                       width: '70px',
-                      background: '#111',
+                      background: colors.bg,
                       border: `1px solid ${colors.border}`,
                       borderRadius: '4px',
                       color: colors.cream,
@@ -225,7 +225,7 @@ export default function AddExpenseModal({ onClose, onAdded, members }) {
             style={{
               color: colors.creamDim,
               fontSize: '0.85rem',
-              background: '#0d0d1a',
+              background: colors.bg,
               border: `1px solid ${colors.border}`,
               borderRadius: '6px',
               padding: '8px 12px',

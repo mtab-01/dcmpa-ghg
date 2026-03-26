@@ -105,7 +105,7 @@ export default function ExpenseList({ expenses, members }) {
                     {formatCurrency(expense.amount)}
                   </p>
                   <p style={{ fontSize: '0.72rem', color: colors.textMuted, fontFamily: fonts.mono }}>
-                    {formatCurrency(expense.amount / 12)}/person
+                    {formatCurrency(expense.amount / members.length)}/person
                   </p>
                 </div>
               </div>

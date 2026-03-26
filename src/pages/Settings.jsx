@@ -9,7 +9,7 @@ export default function Settings() {
   const [draft, setDraft] = useState([...members])
   const [saved, setSaved] = useState(false)
 
-  // Sync draft when members load from Supabase
+  // Sync draft when members load from Firebase
   const [synced, setSynced] = useState(false)
   if (!loading && !synced) {
     setSynced(true)

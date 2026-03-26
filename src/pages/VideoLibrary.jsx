@@ -219,6 +219,7 @@ export default function VideoLibrary() {
             videos={videos}
             selectedFolder={selectedFolder}
             onDelete={handleDelete}
+            members={members}
           />
         )}
       </div>

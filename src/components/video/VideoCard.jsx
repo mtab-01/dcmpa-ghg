@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { colors, radius, shadow, fonts } from '../../theme'
 import { getYouTubeEmbedUrl } from '../../utils/youtubeEmbed'
-import { FOLDER_STRUCTURE } from '../../constants'
+import { getFolderStructure, DEFAULT_MEMBERS } from '../../constants'
 import Badge from '../ui/Badge'
 import Button from '../ui/Button'
 
-function getFolderLabel(folderKey) {
-  for (const f of FOLDER_STRUCTURE) {
+function getFolderLabel(folderKey, members) {
+  for (const f of getFolderStructure(members)) {
     if (f.key === folderKey) return f.label
     for (const child of f.children || []) {
       if (child.key === folderKey) return `${f.label} / ${child.label}`
@@ -15,7 +15,7 @@ function getFolderLabel(folderKey) {
   return folderKey
 }
 
-export default function VideoCard({ video, onDelete }) {
+export default function VideoCard({ video, onDelete, members = DEFAULT_MEMBERS }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const embedUrl = getYouTubeEmbedUrl(video.url)
 
@@ -134,7 +134,7 @@ export default function VideoCard({ video, onDelete }) {
 
         <div style={{ marginTop: '8px', display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
           <Badge color={colors.bgDeep} variant="light">
-            {getFolderLabel(video.folder)}
+            {getFolderLabel(video.folder, members)}
           </Badge>
         </div>
 

@@ -1,7 +1,7 @@
 import { colors, fonts } from '../../theme'
 import VideoCard from './VideoCard'
 
-export default function VideoGrid({ videos, onDelete, selectedFolder }) {
+export default function VideoGrid({ videos, onDelete, selectedFolder, members }) {
   const filtered = !selectedFolder || selectedFolder === 'all'
     ? videos
     : videos.filter(v => v.folder === selectedFolder || v.folder?.startsWith(selectedFolder + '-'))
@@ -37,7 +37,7 @@ export default function VideoGrid({ videos, onDelete, selectedFolder }) {
       gap: '20px',
     }}>
       {filtered.map(video => (
-        <VideoCard key={video.id} video={video} onDelete={onDelete} />
+        <VideoCard key={video.id} video={video} onDelete={onDelete} members={members} />
       ))}
     </div>
   )

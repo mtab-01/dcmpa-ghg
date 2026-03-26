@@ -47,7 +47,7 @@ export default function Modal({ onClose, title, children, maxWidth = '560px' }) 
           borderBottom: `1px solid ${colors.border}`,
           position: 'sticky', top: 0, background: colors.surface, zIndex: 1,
         }}>
-          <h3 style={{ fontFamily: "'Georgia', serif", color: colors.gold, fontSize: '1.2rem' }}>
+          <h3 style={{ fontFamily: "'Plus Jakarta Sans', 'Inter', system-ui, sans-serif", color: colors.gold, fontSize: '1.2rem' }}>
             {title}
           </h3>
           <button
