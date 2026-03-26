@@ -18,7 +18,22 @@ function formatDate(iso) {
   return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 }
 
+function genId() {
+  return Math.random().toString(36).slice(2, 10)
+}
+
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
+
+const LOOP_COLORS = [
+  '#f5820d', // orange
+  '#2e86de', // blue
+  '#16a34a', // green
+  '#e03535', // red
+  '#9333ea', // purple
+  '#0891b2', // teal
+  '#f59e0b', // amber
+  '#ec4899', // pink
+]
 
 export default function Mix() {
   const isMobile = useIsMobile()
@@ -35,11 +50,18 @@ export default function Mix() {
   const [seeking, setSeeking] = useState(false)
   const [speed, setSpeed] = useState(1)
 
-  // Loop state
-  const [loopStart, setLoopStart] = useState(null)   // seconds or null
-  const [loopEnd, setLoopEnd] = useState(null)       // seconds or null
-  const [loopEnabled, setLoopEnabled] = useState(false)
+  // Multi-loop state (synced with Firestore)
+  // Each loop: { id, name, color, start, end }
+  const [loops, setLoops] = useState([])
+  const [activeLoopId, setActiveLoopId] = useState(null)
   const loopRef = useRef({ start: null, end: null, enabled: false })
+
+  // Draft loop state (local, for setting A/B before saving)
+  const [showDraft, setShowDraft] = useState(false)
+  const [draftStart, setDraftStart] = useState(null)
+  const [draftEnd, setDraftEnd] = useState(null)
+  const [draftName, setDraftName] = useState('')
+  const [draftColor, setDraftColor] = useState(LOOP_COLORS[0])
 
   // Upload state
   const [showUpload, setShowUpload] = useState(false)
@@ -50,19 +72,23 @@ export default function Mix() {
 
   // Keep loopRef in sync so the timeupdate closure can read it without stale state
   useEffect(() => {
-    loopRef.current = { start: loopStart, end: loopEnd, enabled: loopEnabled }
-  }, [loopStart, loopEnd, loopEnabled])
+    const active = loops.find(l => l.id === activeLoopId)
+    loopRef.current = {
+      start: active?.start ?? null,
+      end: active?.end ?? null,
+      enabled: !!active,
+    }
+  }, [activeLoopId, loops])
 
   useEffect(() => { loadMix() }, [])
 
-  // Load loop from Firestore and subscribe to changes
+  // Load loops from Firestore and subscribe to changes
   useEffect(() => {
     const unsub = onSnapshot(doc(db, 'mix_loops', 'current'), snap => {
       if (!snap.exists()) return
       const d = snap.data()
-      setLoopStart(d.loopStart ?? null)
-      setLoopEnd(d.loopEnd ?? null)
-      setLoopEnabled(d.loopEnabled ?? false)
+      setLoops(d.loops ?? [])
+      setActiveLoopId(d.activeLoopId ?? null)
     })
     return unsub
   }, [])
@@ -151,43 +177,66 @@ export default function Mix() {
   }
 
   // ── Loop helpers ──────────────────────────────────────────────────────────
-  const saveLoop = useCallback(async (patch) => {
+  const persistLoops = useCallback(async (newLoops, newActiveId) => {
     try {
-      await setDoc(doc(db, 'mix_loops', 'current'), patch, { merge: true })
+      await setDoc(doc(db, 'mix_loops', 'current'), {
+        loops: newLoops,
+        activeLoopId: newActiveId ?? null,
+      })
     } catch { /* non-critical */ }
   }, [])
 
-  function setLoopA() {
+  function setDraftA() {
     const t = audioRef.current?.currentTime ?? currentTime
-    setLoopStart(t)
-    // If B exists and is before new A, clear B
-    const newEnd = loopEnd !== null && loopEnd > t ? loopEnd : null
-    setLoopEnd(newEnd)
-    saveLoop({ loopStart: t, loopEnd: newEnd })
+    setDraftStart(t)
+    if (draftEnd !== null && draftEnd <= t) setDraftEnd(null)
+    setShowDraft(true)
   }
 
-  function setLoopB() {
+  function setDraftB() {
     const t = audioRef.current?.currentTime ?? currentTime
-    // B must be after A
-    if (loopStart !== null && t <= loopStart) return
-    setLoopEnd(t)
-    saveLoop({ loopEnd: t })
+    if (draftStart !== null && t <= draftStart) return
+    setDraftEnd(t)
   }
 
-  function clearLoop() {
-    setLoopStart(null)
-    setLoopEnd(null)
-    setLoopEnabled(false)
-    saveLoop({ loopStart: null, loopEnd: null, loopEnabled: false })
+  function clearDraft() {
+    setDraftStart(null)
+    setDraftEnd(null)
+    setDraftName('')
+    setDraftColor(LOOP_COLORS[0])
+    setShowDraft(false)
   }
 
-  async function toggleLoop() {
-    const next = !loopEnabled
-    setLoopEnabled(next)
-    await saveLoop({ loopEnabled: next })
-    // If enabling and we have a region, jump to start
-    if (next && loopStart !== null && audioRef.current) {
-      audioRef.current.currentTime = loopStart
+  async function saveNewLoop() {
+    if (draftStart === null || draftEnd === null || draftEnd <= draftStart) return
+    const newLoop = {
+      id: genId(),
+      name: draftName.trim() || `Loop ${loops.length + 1}`,
+      color: draftColor,
+      start: draftStart,
+      end: draftEnd,
+    }
+    const newLoops = [...loops, newLoop]
+    setLoops(newLoops)
+    await persistLoops(newLoops, activeLoopId)
+    clearDraft()
+  }
+
+  async function deleteLoop(id) {
+    const newLoops = loops.filter(l => l.id !== id)
+    const newActiveId = activeLoopId === id ? null : activeLoopId
+    setLoops(newLoops)
+    setActiveLoopId(newActiveId)
+    await persistLoops(newLoops, newActiveId)
+  }
+
+  async function activateLoop(id) {
+    const newActiveId = activeLoopId === id ? null : id
+    setActiveLoopId(newActiveId)
+    await persistLoops(loops, newActiveId)
+    if (newActiveId && audioRef.current) {
+      const loop = loops.find(l => l.id === newActiveId)
+      if (loop) audioRef.current.currentTime = loop.start
     }
   }
 
@@ -211,6 +260,11 @@ export default function Mix() {
         uploaded_at: new Date().toISOString(),
         download_url: downloadUrl,
       })
+      // Reset all loops when a new mix is uploaded
+      await setDoc(doc(db, 'mix_loops', 'current'), { loops: [], activeLoopId: null })
+      setLoops([])
+      setActiveLoopId(null)
+      clearDraft()
       setUploading(false)
       setShowUpload(false)
       setVersionLabel('')
@@ -224,9 +278,9 @@ export default function Mix() {
 
   // ── Derived values ────────────────────────────────────────────────────────
   const pct = duration > 0 ? (currentTime / duration) * 100 : 0
-  const loopStartPct = duration > 0 && loopStart !== null ? (loopStart / duration) * 100 : null
-  const loopEndPct   = duration > 0 && loopEnd   !== null ? (loopEnd   / duration) * 100 : null
-  const hasLoop = loopStart !== null && loopEnd !== null && loopEnd > loopStart
+  const hasDraft = draftStart !== null && draftEnd !== null && draftEnd > draftStart
+  const draftStartPct = duration > 0 && draftStart !== null ? (draftStart / duration) * 100 : null
+  const draftEndPct   = duration > 0 && draftEnd   !== null ? (draftEnd   / duration) * 100 : null
 
   // ── Styles ────────────────────────────────────────────────────────────────
   const css = `
@@ -278,12 +332,24 @@ export default function Mix() {
     }
     .loop-btn:hover { border-color: ${colors.gold}; color: ${colors.gold}; }
     .loop-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-    .loop-toggle-on {
-      background: ${colors.gold}18 !important;
-      border-color: ${colors.gold} !important;
-      color: ${colors.gold} !important;
-      font-weight: 700 !important;
+    .loop-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: ${radius.md};
+      border: 1px solid ${colors.border};
+      margin-bottom: 6px;
+      transition: border-color 0.15s, background 0.15s;
     }
+    .loop-row:hover { border-color: ${colors.textMuted}; }
+    .color-dot {
+      width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+      cursor: pointer; padding: 0; transition: transform 0.1s, outline 0.1s;
+      outline: 2px solid transparent; outline-offset: 2px;
+    }
+    .color-dot:hover { transform: scale(1.25); }
+    .color-dot.selected { outline-color: ${colors.cream}; transform: scale(1.15); }
   `
 
   return (
@@ -374,53 +440,82 @@ export default function Mix() {
           {/* Controls */}
           <div style={{ padding: '20px 24px 24px' }}>
 
-            {/* ── Scrubber + loop region overlay ── */}
+            {/* ── Scrubber + loop region overlays ── */}
             <div style={{ marginBottom: '16px' }}>
               <div style={{ position: 'relative', height: '5px', marginBottom: '8px' }}>
-                {/* Loop region highlight */}
-                {hasLoop && (
+
+                {/* Saved loop region fills */}
+                {loops.map(loop => {
+                  if (loop.start === null || loop.end === null || loop.end <= loop.start) return null
+                  const sPct = duration > 0 ? (loop.start / duration) * 100 : 0
+                  const ePct = duration > 0 ? (loop.end   / duration) * 100 : 0
+                  const isActive = loop.id === activeLoopId
+                  return (
+                    <div key={`fill-${loop.id}`} style={{
+                      position: 'absolute', top: 0,
+                      left: `${sPct}%`, width: `${ePct - sPct}%`, height: '100%',
+                      background: isActive ? `${loop.color}88` : `${loop.color}44`,
+                      borderRadius: '3px', pointerEvents: 'none', zIndex: 1,
+                    }} />
+                  )
+                })}
+
+                {/* Saved loop start markers */}
+                {loops.map(loop => {
+                  const sPct = duration > 0 && loop.start !== null ? (loop.start / duration) * 100 : null
+                  if (sPct === null) return null
+                  return (
+                    <div key={`ms-${loop.id}`} style={{
+                      position: 'absolute', left: `${sPct}%`, top: '-4px',
+                      width: '2px', height: '13px', background: loop.color,
+                      borderRadius: '1px', zIndex: 3, pointerEvents: 'none',
+                    }} />
+                  )
+                })}
+
+                {/* Saved loop end markers */}
+                {loops.map(loop => {
+                  const ePct = duration > 0 && loop.end !== null ? (loop.end / duration) * 100 : null
+                  if (ePct === null) return null
+                  return (
+                    <div key={`me-${loop.id}`} style={{
+                      position: 'absolute', left: `${ePct}%`, top: '-4px',
+                      width: '2px', height: '13px', background: loop.color,
+                      borderRadius: '1px', zIndex: 3, pointerEvents: 'none',
+                    }} />
+                  )
+                })}
+
+                {/* Draft region fill */}
+                {hasDraft && (
                   <div style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: `${loopStartPct}%`,
-                    width: `${loopEndPct - loopStartPct}%`,
-                    height: '100%',
-                    background: loopEnabled
-                      ? `${colors.orange}55`
-                      : `${colors.border}`,
-                    borderRadius: '3px',
-                    pointerEvents: 'none',
-                    zIndex: 1,
+                    position: 'absolute', top: 0,
+                    left: `${draftStartPct}%`, width: `${draftEndPct - draftStartPct}%`, height: '100%',
+                    background: `${draftColor}44`,
+                    border: `1px dashed ${draftColor}99`,
+                    borderRadius: '3px', pointerEvents: 'none', zIndex: 1,
+                    boxSizing: 'border-box',
                   }} />
                 )}
-                {/* Loop start marker */}
-                {loopStartPct !== null && (
+
+                {/* Draft start marker */}
+                {draftStartPct !== null && (
                   <div style={{
-                    position: 'absolute',
-                    left: `${loopStartPct}%`,
-                    top: '-4px',
-                    width: '2px',
-                    height: '13px',
-                    background: colors.orange,
-                    borderRadius: '1px',
-                    zIndex: 3,
-                    pointerEvents: 'none',
+                    position: 'absolute', left: `${draftStartPct}%`, top: '-4px',
+                    width: '2px', height: '13px', background: draftColor,
+                    borderRadius: '1px', zIndex: 3, pointerEvents: 'none', opacity: 0.75,
                   }} />
                 )}
-                {/* Loop end marker */}
-                {loopEndPct !== null && (
+
+                {/* Draft end marker */}
+                {draftEndPct !== null && (
                   <div style={{
-                    position: 'absolute',
-                    left: `${loopEndPct}%`,
-                    top: '-4px',
-                    width: '2px',
-                    height: '13px',
-                    background: colors.orange,
-                    borderRadius: '1px',
-                    zIndex: 3,
-                    pointerEvents: 'none',
+                    position: 'absolute', left: `${draftEndPct}%`, top: '-4px',
+                    width: '2px', height: '13px', background: draftColor,
+                    borderRadius: '1px', zIndex: 3, pointerEvents: 'none', opacity: 0.75,
                   }} />
                 )}
+
                 <input
                   type="range"
                   className="mix-scrubber"
@@ -502,9 +597,7 @@ export default function Mix() {
               paddingTop: '16px',
               marginBottom: '16px',
             }}>
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
-              }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <span style={{ fontFamily: fonts.mono, fontSize: '0.68rem', color: colors.textMuted, marginRight: '2px' }}>
                   SPEED
                 </span>
@@ -521,72 +614,191 @@ export default function Mix() {
             </div>
 
             {/* ── Loop section ── */}
-            <div style={{
-              borderTop: `1px solid ${colors.border}`,
-              paddingTop: '16px',
-            }}>
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: '8px',
-                flexWrap: 'wrap',
-              }}>
-                <span style={{ fontFamily: fonts.mono, fontSize: '0.68rem', color: colors.textMuted, marginRight: '2px' }}>
-                  LOOP
+            <div style={{ borderTop: `1px solid ${colors.border}`, paddingTop: '16px' }}>
+
+              {/* Section header */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                <span style={{ fontFamily: fonts.mono, fontSize: '0.68rem', color: colors.textMuted }}>
+                  LOOPS
                 </span>
-
-                {/* Set A */}
-                <button className="loop-btn" onClick={setLoopA} title="Set loop start to current position">
-                  [A] {loopStart !== null ? formatTime(loopStart) : '—'}
-                </button>
-
-                {/* Set B */}
-                <button
-                  className="loop-btn"
-                  onClick={setLoopB}
-                  disabled={loopStart === null}
-                  title="Set loop end to current position"
-                >
-                  [B] {loopEnd !== null ? formatTime(loopEnd) : '—'}
-                </button>
-
-                {/* Toggle loop */}
-                <button
-                  className={`loop-btn${loopEnabled ? ' loop-toggle-on' : ''}`}
-                  onClick={toggleLoop}
-                  disabled={!hasLoop}
-                  title={loopEnabled ? 'Disable loop' : 'Enable loop'}
-                >
-                  {loopEnabled ? '⟳ On' : '⟳ Off'}
-                </button>
-
-                {/* Clear */}
-                {(loopStart !== null || loopEnd !== null) && (
+                {!showDraft && (
                   <button
                     className="loop-btn"
-                    onClick={clearLoop}
-                    style={{ color: colors.red, borderColor: `${colors.red}60` }}
-                    title="Clear loop markers"
+                    onClick={() => setShowDraft(true)}
+                    style={{ padding: '4px 10px', fontSize: '0.7rem' }}
                   >
-                    ✕ Clear
+                    + New Loop
                   </button>
                 )}
               </div>
 
-              {hasLoop && (
-                <p style={{
-                  fontFamily: fonts.mono, fontSize: '0.68rem', color: colors.textMuted,
-                  marginTop: '8px',
+              {/* Draft editor */}
+              {showDraft && (
+                <div style={{
+                  border: `1.5px dashed ${draftColor}99`,
+                  borderRadius: radius.md,
+                  padding: '12px',
+                  marginBottom: '10px',
+                  background: `${draftColor}08`,
                 }}>
-                  {formatTime(loopStart)} → {formatTime(loopEnd)}
-                  {' '}·{' '}
-                  {formatTime(loopEnd - loopStart)} region
-                  {loopEnabled && (
-                    <span style={{ color: colors.orange, marginLeft: '8px' }}>● looping</span>
+                  {/* Name + color row */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      placeholder={`Loop ${loops.length + 1}`}
+                      value={draftName}
+                      onChange={e => setDraftName(e.target.value)}
+                      style={{
+                        flex: 1, minWidth: '80px',
+                        background: colors.bg, border: `1px solid ${colors.border}`,
+                        borderRadius: radius.sm, padding: '6px 10px',
+                        color: colors.cream, fontFamily: fonts.body, fontSize: '0.82rem',
+                        outline: 'none',
+                      }}
+                    />
+                    <div style={{ display: 'flex', gap: '5px', flexShrink: 0 }}>
+                      {LOOP_COLORS.map(c => (
+                        <button
+                          key={c}
+                          className={`color-dot${draftColor === c ? ' selected' : ''}`}
+                          style={{ background: c }}
+                          onClick={() => setDraftColor(c)}
+                          title={c}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* A / B / Save / Cancel */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      className="loop-btn"
+                      onClick={setDraftA}
+                      style={{ borderColor: draftStart !== null ? draftColor : undefined,
+                               color: draftStart !== null ? draftColor : undefined }}
+                      title="Set loop start to current position"
+                    >
+                      [A] {draftStart !== null ? formatTime(draftStart) : '—'}
+                    </button>
+                    <button
+                      className="loop-btn"
+                      onClick={setDraftB}
+                      disabled={draftStart === null}
+                      style={{ borderColor: draftEnd !== null ? draftColor : undefined,
+                               color: draftEnd !== null ? draftColor : undefined }}
+                      title="Set loop end to current position"
+                    >
+                      [B] {draftEnd !== null ? formatTime(draftEnd) : '—'}
+                    </button>
+                    <button
+                      className="loop-btn"
+                      onClick={saveNewLoop}
+                      disabled={!hasDraft}
+                      style={hasDraft ? {
+                        background: `${draftColor}22`,
+                        borderColor: draftColor,
+                        color: draftColor,
+                        fontWeight: 700,
+                      } : {}}
+                    >
+                      Save Loop
+                    </button>
+                    <button
+                      className="loop-btn"
+                      onClick={clearDraft}
+                      style={{ marginLeft: 'auto', color: colors.textMuted }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+
+                  {hasDraft && (
+                    <p style={{ fontFamily: fonts.mono, fontSize: '0.65rem', color: colors.textMuted, marginTop: '8px' }}>
+                      {formatTime(draftStart)} → {formatTime(draftEnd)} · {formatTime(draftEnd - draftStart)}
+                    </p>
                   )}
+                </div>
+              )}
+
+              {/* Saved loops list */}
+              {loops.length === 0 && !showDraft && (
+                <p style={{ fontSize: '0.8rem', color: colors.textMuted, padding: '8px 0 4px' }}>
+                  No loops saved yet.
                 </p>
               )}
 
-              <p style={{ fontSize: '0.68rem', color: `${colors.textMuted}99`, marginTop: '6px' }}>
-                Loop markers sync live for all team members.
+              {loops.map(loop => {
+                const isActive = loop.id === activeLoopId
+                return (
+                  <div
+                    key={loop.id}
+                    className="loop-row"
+                    style={isActive ? {
+                      borderColor: loop.color,
+                      background: `${loop.color}10`,
+                    } : {}}
+                  >
+                    {/* Color swatch */}
+                    <div style={{
+                      width: '10px', height: '10px', borderRadius: '50%',
+                      background: loop.color, flexShrink: 0,
+                    }} />
+
+                    {/* Name */}
+                    <span style={{
+                      fontFamily: fonts.mono, fontSize: '0.75rem', flex: 1, minWidth: 0,
+                      color: isActive ? loop.color : colors.creamDim,
+                      fontWeight: isActive ? 700 : 400,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {loop.name}
+                    </span>
+
+                    {/* Time range */}
+                    <span style={{
+                      fontFamily: fonts.mono, fontSize: '0.65rem',
+                      color: colors.textMuted, flexShrink: 0,
+                    }}>
+                      {formatTime(loop.start)}–{formatTime(loop.end)}
+                    </span>
+
+                    {/* Activate toggle */}
+                    <button
+                      onClick={() => activateLoop(loop.id)}
+                      style={{
+                        background: isActive ? `${loop.color}22` : 'none',
+                        border: `1.5px solid ${isActive ? loop.color : colors.border}`,
+                        borderRadius: radius.sm, padding: '3px 8px',
+                        fontFamily: fonts.mono, fontSize: '0.65rem',
+                        color: isActive ? loop.color : colors.textMuted,
+                        cursor: 'pointer', flexShrink: 0, transition: 'all 0.15s',
+                        fontWeight: isActive ? 700 : 400,
+                      }}
+                    >
+                      {isActive ? '⟳ On' : '⟳'}
+                    </button>
+
+                    {/* Delete */}
+                    <button
+                      onClick={() => deleteLoop(loop.id)}
+                      style={{
+                        background: 'none', border: 'none',
+                        color: colors.textMuted, cursor: 'pointer',
+                        fontSize: '0.8rem', padding: '2px 4px',
+                        flexShrink: 0, transition: 'color 0.15s',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.color = colors.red }}
+                      onMouseLeave={e => { e.currentTarget.style.color = colors.textMuted }}
+                      title="Delete loop"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )
+              })}
+
+              <p style={{ fontSize: '0.68rem', color: `${colors.textMuted}99`, marginTop: '8px' }}>
+                Loops sync live for all team members and reset when a new mix is uploaded.
               </p>
             </div>
           </div>
@@ -679,7 +891,7 @@ export default function Mix() {
           </div>
 
           <p style={{ fontSize: '0.73rem', color: colors.textMuted, marginTop: '10px' }}>
-            Supports MP3, M4A, WAV, OGG. Uploading replaces the previous mix.
+            Supports MP3, M4A, WAV, OGG. Uploading replaces the previous mix and resets all loops.
           </p>
         </div>
       )}
